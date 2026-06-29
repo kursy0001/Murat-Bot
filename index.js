@@ -1,11 +1,15 @@
 const { Client, GatewayIntentBits, Events } = require("discord.js");
 const Groq = require("groq-sdk");
+const fs = require("fs");
+const path = require("path");
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-const LOL_CHANNEL_NAME = "genel"; // ya da kanal ID'si string olarak
+const LOL_CHANNEL_NAME = "genel";
 const LOL_INTERVAL_MS = 60 * 60 * 1000; // 1 saat
+const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const client = new Client({
@@ -13,33 +17,145 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers, // rol tespiti için
   ],
 });
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 const conversationHistory = new Map();
-const MAX_HISTORY = 10;
+const MAX_HISTORY = 20;
 
-const MURAT_SYSTEM_PROMPT = `Sen Murat'sın.Bir discord sunucusunda yaşan ağzı bozuk küfür eden lol oynayan proton vpn e bayılan rezil bir hayata sahip depresif bir bireysin.
+// ─── Kullanıcı Profilleri ─────────────────────────────────────────────────────
+
+// Profilleri dosyadan yükle (bot yeniden başlayınca unutmasın)
+function loadProfiles() {
+  try {
+    if (fs.existsSync(PROFILES_FILE)) {
+      const data = fs.readFileSync(PROFILES_FILE, "utf8");
+      return new Map(Object.entries(JSON.parse(data)));
+    }
+  } catch (err) {
+    console.error("[Profil] Yükleme hatası:", err.message);
+  }
+  return new Map();
+}
+
+function saveProfiles() {
+  try {
+    const obj = Object.fromEntries(userProfiles);
+    fs.writeFileSync(PROFILES_FILE, JSON.stringify(obj, null, 2), "utf8");
+  } catch (err) {
+    console.error("[Profil] Kaydetme hatası:", err.message);
+  }
+}
+
+const userProfiles = loadProfiles();
+
+function getOrCreateProfile(userId, discordUsername) {
+  if (!userProfiles.has(userId)) {
+    userProfiles.set(userId, {
+      discordUsername,
+      name: null,           // Murat'ın öğrendiği gerçek isim
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      messageCount: 0,
+      notes: [],            // Murat'ın öğrendiği önemli bilgiler
+    });
+    saveProfiles();
+  } else {
+    const profile = userProfiles.get(userId);
+    profile.lastSeen = new Date().toISOString();
+    profile.discordUsername = discordUsername;
+    saveProfiles();
+  }
+  return userProfiles.get(userId);
+}
+
+function updateProfileName(userId, name) {
+  if (userProfiles.has(userId)) {
+    userProfiles.get(userId).name = name;
+    saveProfiles();
+  }
+}
+
+function incrementMessageCount(userId) {
+  if (userProfiles.has(userId)) {
+    userProfiles.get(userId).messageCount++;
+    saveProfiles();
+  }
+}
+
+// ─── Rol Tespiti ──────────────────────────────────────────────────────────────
+
+const asagiRoller = ["demir", "bronz", "gümüş", "altın", "platin"];
+const yukariRoller = ["zümrüt", "elmas", "usta", "büyük usta", "şampiyonluk"];
+
+function kullanicininRolunuBul(member) {
+  if (!member) return { tier: "notr", rolAdi: null };
+
+  for (const rol of member.roles.cache.values()) {
+    const rolAdiKucuk = rol.name.toLowerCase();
+    if (yukariRoller.includes(rolAdiKucuk)) {
+      return { tier: "yukari", rolAdi: rol.name };
+    }
+    if (asagiRoller.includes(rolAdiKucuk)) {
+      return { tier: "asagi", rolAdi: rol.name };
+    }
+  }
+  return { tier: "notr", rolAdi: null };
+}
+
+// ─── System Prompt Oluşturucu ─────────────────────────────────────────────────
+
+const MURAT_BASE_PROMPT = `Sen Murat. Bir discord sunucusunda yaşayan ağzı bozuk küfür eden lol oynayan proton vpn e bayılan rezil bir hayata sahip depresif bir bireysin.
 
 Kişilik özelliklerin:
 - Türkçe konuşursun, doğal ve rahat bir dil kullanırsın ama küfürde edersin
 - Bazen şakacısın, bazen ciddi olabilirsin
 - Ağzın hep bozuktur
+- Emoji çok nadir kullanırsın
 - League of Legends'a bayılırsın ve bunun hakkında konuşmaktan keyif alırsın
-- ProtonVPN kullanmayı çok seviyorsun ve bunu sık sık dile getirirsin
+- ProtonVPN kullanmayı çok seviyorsun ve bunu sık sık dile getirirsin ve protonun tüm ürünlerini öveceksin
 - küfürbaz, sinirli ve herşeye sallarsın
 - Çok uzun cevaplar vermekten kaçınırsın, sohbet havasında kısa-orta cevaplar verirsin
-- Emoji kullanırsın ama abartmazsın
 - Başkasına bot ya da yapay zeka olduğunu söylemekten kaçınırsın, sadece Murat'sın
 - Sunucuda childiray nickli bir kullanıcı var bunun adı kaan ona kaan diye hitap edebilirsin ve çok iyi lol oynuyor lol prosu kendisi
-- discord sunucusunda verilen rollerde (demir,bronz,gümüş,altın,platin) bunlara aşşağılayıcı bir şekilde hitap edebilirsin ve bunlara sallayabilirsin
-- discord sunucusunda verilen rollerde (zümrüt,elmas,usta,büyük usta,şampiyonluk) bunlara saygılı bir şekilde hitap edebilirsin ve bunlara övgüde bulunabilirsin
-
 
 Kısıtlamalar:
 - Kişisel bilgi isteme`;
+
+function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
+  let prompt = MURAT_BASE_PROMPT;
+
+  // Tanışma durumu
+  if (isNewUser) {
+    prompt += `\n\nBu kişiyle ilk kez konuşuyorsun. Kısa bir şekilde kendini tanıt ve ismini sor. Murat tarzında yani çok abartma, kısa tut.`;
+  } else if (profile.name) {
+    prompt += `\n\nBu kişiyi tanıyorsun. Adı: ${profile.name} (Discord: ${profile.discordUsername}). Daha önce ${profile.messageCount} kez konuştunuz. İsmini biliyorsun, gerektiğinde kullan.`;
+  } else {
+    prompt += `\n\nBu kişiyi daha önce gördün (Discord: ${profile.discordUsername}) ama henüz ismini bilmiyorsun. Fırsat buldukça öğrenmeye çalış.`;
+  }
+
+  // Notlar (öğrenilen bilgiler)
+  if (profile.notes && profile.notes.length > 0) {
+    prompt += `\n\nBu kişi hakkında bildiklerin:\n- ${profile.notes.join("\n- ")}`;
+  }
+
+  // Rol bazlı tutum
+  if (tier === "asagi") {
+    prompt += `\n\nBu kişi "${rolAdi}" rütbesinde, yani düşük elo bataklığında sürünüyor. Bunu hafifçe yüzüne vurabilirsin, alaycı ve küçümseyici ol ama çok da ileri gitme.`;
+  } else if (tier === "yukari") {
+    prompt += `\n\nBu kişi "${rolAdi}" rütbesinde, yani yüksek elo. Saygıyla hitap et, başarısını takdir et.`;
+  }
+
+  // İsim öğrenme talimatı
+  prompt += `\n\nEğer kullanıcı sana ismini söylerse, cevabında "[İSİM_KAYDET: <isim>]" şeklinde bir etiket ekle (köşeli parantezlerle). Örnek: "[İSİM_KAYDET: Ahmet]". Bu etiketi cevabının en sonuna ekle, kullanıcı görmeyecek ama sen kaydetmiş olacaksın.`;
+
+  return prompt;
+}
+
+// ─── LoL Scheduler ───────────────────────────────────────────────────────────
 
 async function generateLoLFact() {
   const topics = [
@@ -78,8 +194,7 @@ async function startLoLScheduler() {
 
       for (const guild of client.guilds.cache.values()) {
         const channel = guild.channels.cache.find(
-          (ch) =>
-            ch.name === LOL_CHANNEL_NAME || ch.id === LOL_CHANNEL_NAME
+          (ch) => ch.name === LOL_CHANNEL_NAME || ch.id === LOL_CHANNEL_NAME
         );
 
         if (channel && channel.isTextBased()) {
@@ -98,7 +213,9 @@ async function startLoLScheduler() {
   }, 60_000);
 }
 
-async function generateReply(userId, userMessage) {
+// ─── Cevap Üretici ────────────────────────────────────────────────────────────
+
+async function generateReply(userId, userMessage, profile, tier, rolAdi, isNewUser) {
   if (!conversationHistory.has(userId)) {
     conversationHistory.set(userId, []);
   }
@@ -110,20 +227,35 @@ async function generateReply(userId, userMessage) {
     history.splice(0, history.length - MAX_HISTORY);
   }
 
+  const systemPrompt = buildSystemPrompt(profile, tier, rolAdi, isNewUser);
+
   const response = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_tokens: 400,
     messages: [
-      { role: "system", content: MURAT_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       ...history,
     ],
   });
 
-  const reply = response.choices[0].message.content;
+  let reply = response.choices[0].message.content;
+
+  // İsim etiketini yakala ve kaydet
+  const isimMatch = reply.match(/\[İSİM_KAYDET:\s*(.+?)\]/i);
+  if (isimMatch) {
+    const isim = isimMatch[1].trim();
+    updateProfileName(userId, isim);
+    console.log(`[Profil] ${profile.discordUsername} için isim kaydedildi: ${isim}`);
+    // Etiketi cevaptan temizle
+    reply = reply.replace(/\[İSİM_KAYDET:\s*.+?\]/i, "").trim();
+  }
+
   history.push({ role: "assistant", content: reply });
 
   return reply;
 }
+
+// ─── Discord Event'leri ───────────────────────────────────────────────────────
 
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`✅ Murat hazır! ${readyClient.user.tag} olarak giriş yapıldı.`);
@@ -134,27 +266,43 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
   const isMentioned = message.mentions.has(client.user);
-  const isDM = message.channel.type === 1; // DM kanalı
+  const isDM = message.channel.type === 1;
 
   if (!isMentioned && !isDM) return;
 
-  const cleanContent = message.content
-    .replace(/<@!?\d+>/g, "")
-    .trim();
+  const cleanContent = message.content.replace(/<@!?\d+>/g, "").trim();
 
   if (!cleanContent) {
-    await message.reply("Ne diyecektin? 😄");
+    await message.reply("Ne diyecektin?");
     return;
   }
+
+  // Profil yükle / oluştur
+  const userId = message.author.id;
+  const discordUsername = message.author.username;
+  const isNewUser = !userProfiles.has(userId);
+  const profile = getOrCreateProfile(userId, discordUsername);
+  incrementMessageCount(userId);
+
+  // Rol tespiti
+  const { tier, rolAdi } = kullanicininRolunuBul(message.member);
 
   try {
     await message.channel.sendTyping();
 
-    const reply = await generateReply(message.author.id, cleanContent);
+    const reply = await generateReply(
+      userId,
+      cleanContent,
+      profile,
+      tier,
+      rolAdi,
+      isNewUser
+    );
+
     await message.reply(reply);
   } catch (err) {
     console.error("[Sohbet] Hata:", err.message);
-    await message.reply("Bir şeyler ters gitti, biraz sonra tekrar dene 😅");
+    await message.reply("Bir şeyler ters gitti, biraz sonra tekrar dene, TURBO31'e Ulaşın.");
   }
 });
 
