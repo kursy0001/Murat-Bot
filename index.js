@@ -13,7 +13,7 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const LOL_CHANNEL_NAME = "genel";
-const LOL_INTERVAL_MS = 60 * 60 * 100000000000; // 1 saat
+const LOL_INTERVAL_MS = 60 * 60 * 1000; // 1 saat
 const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,14 +166,10 @@ function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
 
 async function generateLoLFact() {
   const topics = [
-    "ilginç bir şampiyon tarihi veya lore detayı",
-    "az bilinen bir oyun mekaniği veya ipucu",
-    "meta ile ilgili güncel bir strateji tavsiyesi",
-    "tarihi bir turnuva anı veya efsanevi bir oyuncu",
-    "rün veya eşya seçimiyle ilgili pratik bir tavsiye",
-    "şampiyon sinerjileri veya karşı pick bilgisi",
-    "harita kontrolü ve warding hakkında bir ipucu",
-    "ranked'da rank atlamak için psikolojik bir tavsiye",
+      "Muratın ne kadar kötü oynadıgından bahser",
+      "Murata salla",
+      "Muratın mal oldugunu faalan iddia et",
+      "Murat kötü bir lol oyuncusu",
   ];
 
   const randomTopic = topics[Math.floor(Math.random() * topics.length)];
