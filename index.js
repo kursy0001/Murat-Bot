@@ -1,4 +1,10 @@
-const { Client, GatewayIntentBits, Events } = require("discord.js");
+const { Client, GatewayIntentBits, Events, ChannelType } = require("discord.js");
+const {
+  joinVoiceChannel,
+  VoiceConnectionStatus,
+  entersState,
+  getVoiceConnection,
+} = require("@discordjs/voice");
 const Groq = require("groq-sdk");
 const fs = require("fs");
 const path = require("path");
@@ -18,6 +24,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers, // rol tespiti için
+    GatewayIntentBits.GuildVoiceStates, // sese girmek için
   ],
 });
 
@@ -56,11 +63,11 @@ function getOrCreateProfile(userId, discordUsername) {
   if (!userProfiles.has(userId)) {
     userProfiles.set(userId, {
       discordUsername,
-      name: null,           // Murat'ın öğrendiği gerçek isim
+      name: null, // Murat'ın öğrendiği gerçek isim
       firstSeen: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
       messageCount: 0,
-      notes: [],            // Murat'ın öğrendiği önemli bilgiler
+      notes: [], // Murat'ın öğrendiği önemli bilgiler
     });
     saveProfiles();
   } else {
@@ -213,6 +220,88 @@ async function startLoLScheduler() {
   }, 60_000);
 }
 
+// ─── Sese Gel Komutu ───────────────────────────────────────────────────────────
+
+const SESE_GEL_REGEX = /sese\s*gel/i;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function rastgeleN(arr, n) {
+  const kopya = [...arr];
+  for (let i = kopya.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [kopya[i], kopya[j]] = [kopya[j], kopya[i]];
+  }
+  return kopya.slice(0, n);
+}
+
+async function sesKanalinaGirVeBekle(channel) {
+  const connection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: true,
+  });
+
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+  } catch (err) {
+    connection.destroy();
+    throw err;
+  }
+
+  return connection;
+}
+
+async function seseGelKomutu(message) {
+  const voiceChannel = message.member?.voice?.channel;
+
+  if (!voiceChannel) {
+    await message.reply("Önce bir sese gir ki geleyim, boşluğa mı gireyim lan.");
+    return;
+  }
+
+  // Zaten bir bağlantı varsa önce temizle
+  const mevcutBaglanti = getVoiceConnection(message.guild.id);
+  if (mevcutBaglanti) {
+    mevcutBaglanti.destroy();
+  }
+
+  await message.reply("Tamam geliyorum, dur bi saniye.");
+
+  // Sunucudaki tüm ses kanallarını bul (hedef kanal hariç)
+  const tumSesKanallari = message.guild.channels.cache.filter(
+    (ch) => ch.type === ChannelType.GuildVoice && ch.id !== voiceChannel.id
+  );
+
+  if (tumSesKanallari.size > 0) {
+    const kacTane = Math.min(tumSesKanallari.size, 2 + Math.floor(Math.random() * 2)); // 2-3 kanal
+    const rastgeleKanallar = rastgeleN([...tumSesKanallari.values()], kacTane);
+
+    for (const kanal of rastgeleKanallar) {
+      try {
+        const conn = await sesKanalinaGirVeBekle(kanal);
+        await delay(1500 + Math.random() * 1500); // 1.5-3sn takıl
+        conn.destroy();
+        await delay(500);
+      } catch (err) {
+        console.error(`[Sese Gel] ${kanal.name} kanalına girerken hata:`, err.message);
+      }
+    }
+  }
+
+  // Son olarak asıl kişinin kanalına gir ve orada kal
+  try {
+    await sesKanalinaGirVeBekle(voiceChannel);
+    console.log(`[Sese Gel] ${voiceChannel.name} kanalına girildi.`);
+  } catch (err) {
+    console.error("[Sese Gel] Hedef kanala girerken hata:", err.message);
+    await message.channel.send("Bağlanamadım lan, bir sıçtım galiba.");
+  }
+}
+
 // ─── Cevap Üretici ────────────────────────────────────────────────────────────
 
 async function generateReply(userId, userMessage, profile, tier, rolAdi, isNewUser) {
@@ -274,6 +363,17 @@ client.on(Events.MessageCreate, async (message) => {
 
   if (!cleanContent) {
     await message.reply("Ne diyecektin?");
+    return;
+  }
+
+  // "Sese gel" komutu — DM'de çalışmaz, sunucu içinde olmalı
+  if (!isDM && SESE_GEL_REGEX.test(cleanContent)) {
+    try {
+      await seseGelKomutu(message);
+    } catch (err) {
+      console.error("[Sese Gel] Genel hata:", err.message);
+      await message.reply("Bir şeyler ters gitti lan, tekrar dene.");
+    }
     return;
   }
 
