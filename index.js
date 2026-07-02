@@ -13,7 +13,7 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const LOL_CHANNEL_NAME = "genel";
-const LOL_INTERVAL_MS = 60 * 60 * 1000; // 1 saat
+const LOL_INTERVAL_MS = 60 * 60 * 100000000000; // 1 saat
 const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
 
 // ─────────────────────────────────────────────────────────────────────────────
