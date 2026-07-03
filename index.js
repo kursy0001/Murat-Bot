@@ -20,7 +20,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const LOL_CHANNEL_NAME = "genel";
 const LOL_INTERVAL_MS = 60 * 60 * 1000; // 1 saat
 const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
-const ISTIKLAL_MARSI_URL = "https://www.youtube.com/shorts/SqMk80ptreI";
+const ISTIKLAL_MARSI_URL = "www.youtube.com/shorts/SqMk80ptreI";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -437,7 +437,7 @@ client.on(Events.MessageCreate, async (message) => {
     const connection = await baglantiyiAlVeyaKur(message, voiceChannel);
 
     // Shorts linki de çalışır
-    const stream = await play.stream("https://www.youtube.com/shorts/SqMk80ptreI");
+    const stream = await play.stream("www.youtube.com/shorts/SqMk80ptreI");
 
     const resource = createAudioResource(stream.stream, {
       inputType: stream.type,
