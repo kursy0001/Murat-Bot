@@ -327,7 +327,7 @@ async function istiklalMarsiOkuKomutu(message) {
   try {
     const connection = await baglantiyiAlVeyaKur(message, voiceChannel);
 
-    const stream = ytdl(ISTIKLAL_MARSI_URL, {
+    const stream = ytdl(https://www.youtube.com/shorts/SqMk80ptreI, {
       filter: "audioonly",
       quality: "highestaudio",
       highWaterMark: 1 << 25,
