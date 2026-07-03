@@ -427,16 +427,41 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // "İstiklal marşı oku" komutu — DM'de çalışmaz
-  if (!isDM && ISTIKLAL_REGEX.test(cleanContent)) {
-    try {
-      await istiklalMarsiOkuKomutu(message);
-    } catch (err) {
-      console.error("[İstiklal Marşı] Genel hata:", err.message);
-      await message.reply("Bir şeyler ters gitti lan, tekrar dene.");
-    }
-    return;
+ async function istiklalMarsiOkuKomutu(message) {
+  const voiceChannel = message.member?.voice?.channel;
+
+  if (!voiceChannel) {
+    return message.reply("Önce bir ses kanalına gir.");
   }
+
+  await message.reply("🇹🇷 İstiklal Marşı okunuyor!");
+
+  try {
+    const connection = await baglantiyiAlVeyaKur(message, voiceChannel);
+
+    // Shorts linki de çalışır
+    const stream = await play.stream("https://www.youtube.com/shorts/SqMk80ptreI");
+
+    const resource = createAudioResource(stream.stream, {
+      inputType: stream.type,
+    });
+
+    const player = createAudioPlayer();
+
+    connection.subscribe(player);
+    player.play(resource);
+
+    player.on("error", console.error);
+
+    player.once(AudioPlayerStatus.Idle, () => {
+      player.stop();
+    });
+
+  } catch (err) {
+    console.error(err);
+    message.channel.send("İstiklal Marşı çalınamadı.");
+  }
+}
 
   const userId = message.author.id;
   const discordUsername = message.author.username;
