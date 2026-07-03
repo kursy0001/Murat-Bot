@@ -318,39 +318,35 @@ async function istiklalMarsiOkuKomutu(message) {
   const voiceChannel = message.member?.voice?.channel;
 
   if (!voiceChannel) {
-    await message.reply("Önce bir sese gir ki okuyayım, boşluğa mı bağıracağım.");
-    return;
+    return message.reply("Önce bir ses kanalına gir.");
   }
 
-  await message.reply("Dikkat, hazır ol! 🇹🇷");
+  await message.reply("🇹🇷 İstiklal Marşı okunuyor!");
 
   try {
     const connection = await baglantiyiAlVeyaKur(message, voiceChannel);
 
-    const stream = ytdl(https://www.youtube.com/shorts/SqMk80ptreI, {
-      filter: "audioonly",
-      quality: "highestaudio",
-      highWaterMark: 1 << 25,
-    });
+    // Shorts linki de çalışır
+    const stream = await play.stream("https://www.youtube.com/shorts/SqMk80ptreI");
 
-    const resource = createAudioResource(stream, {
-      inputType: StreamType.Arbitrary,
+    const resource = createAudioResource(stream.stream, {
+      inputType: stream.type,
     });
 
     const player = createAudioPlayer();
+
     connection.subscribe(player);
     player.play(resource);
 
-    player.on("error", (err) => {
-      console.error("[İstiklal Marşı] Player hatası:", err.message);
-    });
+    player.on("error", console.error);
 
     player.once(AudioPlayerStatus.Idle, () => {
-      console.log("[İstiklal Marşı] Çalma bitti.");
+      player.stop();
     });
+
   } catch (err) {
-    console.error("[İstiklal Marşı] Hata:", err.message);
-    await message.channel.send("Çalamadım lan, ses sistemi sıçtı.");
+    console.error(err);
+    message.channel.send("İstiklal Marşı çalınamadı.");
   }
 }
 
