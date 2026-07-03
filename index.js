@@ -4,7 +4,12 @@ const {
   VoiceConnectionStatus,
   entersState,
   getVoiceConnection,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  StreamType,
 } = require("@discordjs/voice");
+const ytdl = require("@distube/ytdl-core");
 const Groq = require("groq-sdk");
 const fs = require("fs");
 const path = require("path");
@@ -15,6 +20,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const LOL_CHANNEL_NAME = "genel";
 const LOL_INTERVAL_MS = 60 * 60 * 1000; // 1 saat
 const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
+const ISTIKLAL_MARSI_URL = "https://www.youtube.com/shorts/SqMk80ptreI";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -35,7 +41,6 @@ const MAX_HISTORY = 20;
 
 // ─── Kullanıcı Profilleri ─────────────────────────────────────────────────────
 
-// Profilleri dosyadan yükle (bot yeniden başlayınca unutmasın)
 function loadProfiles() {
   try {
     if (fs.existsSync(PROFILES_FILE)) {
@@ -63,11 +68,11 @@ function getOrCreateProfile(userId, discordUsername) {
   if (!userProfiles.has(userId)) {
     userProfiles.set(userId, {
       discordUsername,
-      name: null, // Murat'ın öğrendiği gerçek isim
+      name: null,
       firstSeen: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
       messageCount: 0,
-      notes: [], // Murat'ın öğrendiği önemli bilgiler
+      notes: [],
     });
     saveProfiles();
   } else {
@@ -135,7 +140,6 @@ Kısıtlamalar:
 function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
   let prompt = MURAT_BASE_PROMPT;
 
-  // Tanışma durumu
   if (isNewUser) {
     prompt += `\n\nBu kişiyle ilk kez konuşuyorsun. Kısa bir şekilde kendini tanıt ve ismini sor. Murat tarzında yani çok abartma, kısa tut.`;
   } else if (profile.name) {
@@ -144,19 +148,16 @@ function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
     prompt += `\n\nBu kişiyi daha önce gördün (Discord: ${profile.discordUsername}) ama henüz ismini bilmiyorsun. Fırsat buldukça öğrenmeye çalış.`;
   }
 
-  // Notlar (öğrenilen bilgiler)
   if (profile.notes && profile.notes.length > 0) {
     prompt += `\n\nBu kişi hakkında bildiklerin:\n- ${profile.notes.join("\n- ")}`;
   }
 
-  // Rol bazlı tutum
   if (tier === "asagi") {
     prompt += `\n\nBu kişi "${rolAdi}" rütbesinde, yani düşük elo bataklığında sürünüyor. Bunu hafifçe yüzüne vurabilirsin, alaycı ve küçümseyici ol ama çok da ileri gitme.`;
   } else if (tier === "yukari") {
     prompt += `\n\nBu kişi "${rolAdi}" rütbesinde, yani yüksek elo. Saygıyla hitap et, başarısını takdir et.`;
   }
 
-  // İsim öğrenme talimatı
   prompt += `\n\nEğer kullanıcı sana ismini söylerse, cevabında "[İSİM_KAYDET: <isim>]" şeklinde bir etiket ekle (köşeli parantezlerle). Örnek: "[İSİM_KAYDET: Ahmet]". Bu etiketi cevabının en sonuna ekle, kullanıcı görmeyecek ama sen kaydetmiş olacaksın.`;
 
   return prompt;
@@ -166,10 +167,10 @@ function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
 
 async function generateLoLFact() {
   const topics = [
-      "Muratın ne kadar kötü oynadıgından bahser",
-      "Murata salla",
-      "Muratın mal oldugunu faalan iddia et",
-      "Murat kötü bir lol oyuncusu",
+    "Muratın ne kadar kötü oynadıgından bahset",
+    "Murata salla",
+    "Muratın mal oldugunu falan iddia et",
+    "Murat kötü bir lol oyuncusu",
   ];
 
   const randomTopic = topics[Math.floor(Math.random() * topics.length)];
@@ -216,9 +217,7 @@ async function startLoLScheduler() {
   }, 60_000);
 }
 
-// ─── Sese Gel Komutu ───────────────────────────────────────────────────────────
-
-const SESE_GEL_REGEX = /sese\s*gel/i;
+// ─── Ses Yardımcıları ───────────────────────────────────────────────────────────
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -238,7 +237,7 @@ async function sesKanalinaGirVeBekle(channel) {
     channelId: channel.id,
     guildId: channel.guild.id,
     adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: true,
+    selfDeaf: false,
   });
 
   try {
@@ -251,6 +250,22 @@ async function sesKanalinaGirVeBekle(channel) {
   return connection;
 }
 
+// Zaten aynı kanalda bir bağlantı varsa onu döndürür, yoksa yeniden bağlanır
+async function baglantiyiAlVeyaKur(message, voiceChannel) {
+  const mevcut = getVoiceConnection(message.guild.id);
+  if (mevcut && mevcut.joinConfig.channelId === voiceChannel.id) {
+    return mevcut;
+  }
+  if (mevcut) {
+    mevcut.destroy();
+  }
+  return sesKanalinaGirVeBekle(voiceChannel);
+}
+
+// ─── Sese Gel Komutu ───────────────────────────────────────────────────────────
+
+const SESE_GEL_REGEX = /sese\s*gel/i;
+
 async function seseGelKomutu(message) {
   const voiceChannel = message.member?.voice?.channel;
 
@@ -259,7 +274,6 @@ async function seseGelKomutu(message) {
     return;
   }
 
-  // Zaten bir bağlantı varsa önce temizle
   const mevcutBaglanti = getVoiceConnection(message.guild.id);
   if (mevcutBaglanti) {
     mevcutBaglanti.destroy();
@@ -267,19 +281,18 @@ async function seseGelKomutu(message) {
 
   await message.reply("Tamam geliyorum, dur bi saniye.");
 
-  // Sunucudaki tüm ses kanallarını bul (hedef kanal hariç)
   const tumSesKanallari = message.guild.channels.cache.filter(
     (ch) => ch.type === ChannelType.GuildVoice && ch.id !== voiceChannel.id
   );
 
   if (tumSesKanallari.size > 0) {
-    const kacTane = Math.min(tumSesKanallari.size, 2 + Math.floor(Math.random() * 2)); // 2-3 kanal
+    const kacTane = Math.min(tumSesKanallari.size, 2 + Math.floor(Math.random() * 2));
     const rastgeleKanallar = rastgeleN([...tumSesKanallari.values()], kacTane);
 
     for (const kanal of rastgeleKanallar) {
       try {
         const conn = await sesKanalinaGirVeBekle(kanal);
-        await delay(1500 + Math.random() * 1500); // 1.5-3sn takıl
+        await delay(1500 + Math.random() * 1500);
         conn.destroy();
         await delay(500);
       } catch (err) {
@@ -288,13 +301,56 @@ async function seseGelKomutu(message) {
     }
   }
 
-  // Son olarak asıl kişinin kanalına gir ve orada kal
   try {
     await sesKanalinaGirVeBekle(voiceChannel);
     console.log(`[Sese Gel] ${voiceChannel.name} kanalına girildi.`);
   } catch (err) {
     console.error("[Sese Gel] Hedef kanala girerken hata:", err.message);
     await message.channel.send("Bağlanamadım lan, bir sıçtım galiba.");
+  }
+}
+
+// ─── İstiklal Marşı Komutu ─────────────────────────────────────────────────────
+
+const ISTIKLAL_REGEX = /istiklal.*mar[şs]/i;
+
+async function istiklalMarsiOkuKomutu(message) {
+  const voiceChannel = message.member?.voice?.channel;
+
+  if (!voiceChannel) {
+    await message.reply("Önce bir sese gir ki okuyayım, boşluğa mı bağıracağım.");
+    return;
+  }
+
+  await message.reply("Dikkat, hazır ol! 🇹🇷");
+
+  try {
+    const connection = await baglantiyiAlVeyaKur(message, voiceChannel);
+
+    const stream = ytdl(ISTIKLAL_MARSI_URL, {
+      filter: "audioonly",
+      quality: "highestaudio",
+      highWaterMark: 1 << 25,
+    });
+
+    const resource = createAudioResource(stream, {
+      inputType: StreamType.Arbitrary,
+    });
+
+    const player = createAudioPlayer();
+    connection.subscribe(player);
+    player.play(resource);
+
+    player.on("error", (err) => {
+      console.error("[İstiklal Marşı] Player hatası:", err.message);
+    });
+
+    player.once(AudioPlayerStatus.Idle, () => {
+      console.log("[İstiklal Marşı] Çalma bitti.");
+    });
+  } catch (err) {
+    console.error("[İstiklal Marşı] Hata:", err.message);
+    await message.channel.send("Çalamadım lan, ses sistemi sıçtı.");
   }
 }
 
@@ -325,13 +381,11 @@ async function generateReply(userId, userMessage, profile, tier, rolAdi, isNewUs
 
   let reply = response.choices[0].message.content;
 
-  // İsim etiketini yakala ve kaydet
   const isimMatch = reply.match(/\[İSİM_KAYDET:\s*(.+?)\]/i);
   if (isimMatch) {
     const isim = isimMatch[1].trim();
     updateProfileName(userId, isim);
     console.log(`[Profil] ${profile.discordUsername} için isim kaydedildi: ${isim}`);
-    // Etiketi cevaptan temizle
     reply = reply.replace(/\[İSİM_KAYDET:\s*.+?\]/i, "").trim();
   }
 
@@ -362,7 +416,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // "Sese gel" komutu — DM'de çalışmaz, sunucu içinde olmalı
+  // "Sese gel" komutu — DM'de çalışmaz
   if (!isDM && SESE_GEL_REGEX.test(cleanContent)) {
     try {
       await seseGelKomutu(message);
@@ -373,14 +427,23 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // Profil yükle / oluştur
+  // "İstiklal marşı oku" komutu — DM'de çalışmaz
+  if (!isDM && ISTIKLAL_REGEX.test(cleanContent)) {
+    try {
+      await istiklalMarsiOkuKomutu(message);
+    } catch (err) {
+      console.error("[İstiklal Marşı] Genel hata:", err.message);
+      await message.reply("Bir şeyler ters gitti lan, tekrar dene.");
+    }
+    return;
+  }
+
   const userId = message.author.id;
   const discordUsername = message.author.username;
   const isNewUser = !userProfiles.has(userId);
   const profile = getOrCreateProfile(userId, discordUsername);
   incrementMessageCount(userId);
 
-  // Rol tespiti
   const { tier, rolAdi } = kullanicininRolunuBul(message.member);
 
   try {
