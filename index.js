@@ -204,20 +204,7 @@ async function generateLoLFact() {
     "Murat kötü bir lol oyuncusu",
   ];
 
-  const randomTopic = topics[Math.floor(Math.random() * topics.length)];
 
-  const response = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    max_tokens: 300,
-    messages: [
-      {
-        role: "user",
-        content: `League of Legends hakkında ${randomTopic} konusunda kısa, ilgi çekici ve bilgilendirici bir mesaj yaz. 
-        Sanki bir Discord sunucusunda arkadaşlara paylaşıyormuşsun gibi samimi bir dille yaz. 
-        Türkçe yaz. 2-4 cümle olsun. Bir emoji ile başla. "Saatlik LoL Bilgisi 🎮" gibi bir başlık ekle.`,
-      },
-    ],
-  });
 
   return response.choices[0].message.content;
 }
@@ -301,7 +288,7 @@ async function seseGelKomutu(message) {
   const voiceChannel = message.member?.voice?.channel;
 
   if (!voiceChannel) {
-    await message.reply("Önce bir sese gir ki geleyim, boşluğa mı gireyim lan.");
+    await message.reply("Öncelikle bir ses kanalına girmen gerekiyor.");
     return;
   }
 
@@ -449,7 +436,7 @@ client.on(Events.MessageCreate, async (message) => {
       await seseGelKomutu(message);
     } catch (err) {
       console.error("[Sese Gel] Genel hata:", err.message);
-      await message.reply("Bir şeyler ters gitti lan, tekrar dene.");
+      await message.reply("Birşeyler ters gitti.");
     }
     return;
   }
