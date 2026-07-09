@@ -702,8 +702,6 @@ async function macKomutu(message, rakipUye) {
   await message.reply({ embeds: [embed] });
 
 
-  const benimPuan = kullaniciPuani(atanUserId);
-  const rakipPuan = kullaniciPuani(rakipUye.id);
 
   let sonucMesaji;
   if (benimGol > rakipGol) {
@@ -725,27 +723,6 @@ async function macKomutu(message, rakipUye) {
   }
 
   veriKaydet();
-
-  const embed = new EmbedBuilder()
-    .setColor(0x1abc9c)
-    .setTitle("⚽ MAÇ SONUCU")
-    .setDescription(
-      `**${message.author.username}**  ${benimGol} — ${rakipGol}  **${rakipUye.username}**\n\n${sonucMesaji}`
-    )
-    .addFields(
-      {
-        name: message.author.username,
-        value: `Hücum: ${benimGucler.hucum.toFixed(1)}\nDefans: ${benimGucler.defans.toFixed(1)}`,
-        inline: true,
-      },
-      {
-        name: rakipUye.username,
-        value: `Hücum: ${rakipGucler.hucum.toFixed(1)}\nDefans: ${rakipGucler.defans.toFixed(1)}`,
-        inline: true,
-      }
-    );
-
-  await message.reply({ embeds: [embed] });
 }
 
 // ─── !!puan / !!puanlar ──────────────────────────────────────────────────────
