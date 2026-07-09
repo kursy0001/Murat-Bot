@@ -1,3 +1,4 @@
+const { futbolMesajIsleyici } = require("./futbol");
 const { Client, GatewayIntentBits, Events, ChannelType } = require("discord.js");
 const {
   joinVoiceChannel,
@@ -13,6 +14,7 @@ const ytdl = require("@distube/ytdl-core");
 const Groq = require("groq-sdk");
 const fs = require("fs");
 const path = require("path");
+
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -420,7 +422,19 @@ client.once(Events.ClientReady, (readyClient) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
 
+  // ↓↓↓ BURAYA EKLE ↓↓↓
+  if (message.content.startsWith("!!")) {
+    const islendi = await futbolMesajIsleyici(message);
+    if (islendi) return;
+  }
+  // ↑↑↑ BURAYA KADAR ↑↑↑
+
+  const isMentioned = message.mentions.has(client.user);
+  const isDM = message.channel.type === 1;
+  // ... senin mevcut kodun devam ediyor
   const isMentioned = message.mentions.has(client.user);
   const isDM = message.channel.type === 1;
 
