@@ -435,7 +435,6 @@ client.on(Events.MessageCreate, async (message) => {
   const isMentioned = message.mentions.has(client.user);
   const isDM = message.channel.type === 1;
   // ... senin mevcut kodun devam ediyor
-  const isMentioned = message.mentions.has(client.user);
   const isDM = message.channel.type === 1;
 
   if (!isMentioned && !isDM) return;
