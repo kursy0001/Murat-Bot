@@ -209,7 +209,16 @@ async function generateLoLFact() {
     "Murat kötü bir lol oyuncusu",
   ];
 
+  const secilenKonu = topics[Math.floor(Math.random() * topics.length)];
 
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    max_tokens: 200,
+    messages: [
+      { role: "system", content: MURAT_BASE_PROMPT },
+      { role: "user", content: secilenKonu },
+    ],
+  });
 
   return response.choices[0].message.content;
 }
@@ -334,6 +343,12 @@ async function seseGelKomutu(message) {
 }
 
 // ─── İstiklal Marşı Komutu ─────────────────────────────────────────────────────
+// NOT: Bu komut "play" adlı bir pakete ihtiyaç duyuyor (play.stream(...)) ama
+// dosyanın hiçbir yerinde "play" require edilmemiş / kurulu değil. Şu an
+// tetiklense bile "play is not defined" hatasıyla çökecektir. Aşağıda
+// ISTIKLAL_REGEX kontrolünü BİLEREK eklemedim ki yanlışlıkla tetiklenip
+// hataya sebep olmasın. "play-dl" paketini kurup burayı ona göre
+// düzenlemek istersen ayrıca yardımcı olabilirim.
 
 const ISTIKLAL_REGEX = /istiklal.*mar[şs]/i;
 
@@ -366,7 +381,6 @@ async function istiklalMarsiOkuKomutu(message) {
     player.once(AudioPlayerStatus.Idle, () => {
       player.stop();
     });
-
   } catch (err) {
     console.error(err);
     message.channel.send("İstiklal Marşı çalınamadı.");
@@ -422,19 +436,14 @@ client.once(Events.ClientReady, (readyClient) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
 
-  // ↓↓↓ BURAYA EKLE ↓↓↓
+  // ─── Futbol komutları (!!oyuncu, !!takım, !!mac, vb.) ───────────────────
   if (message.content.startsWith("!!")) {
     const islendi = await futbolMesajIsleyici(message);
     if (islendi) return;
   }
-  // ↑↑↑ BURAYA KADAR ↑↑↑
 
   const isMentioned = message.mentions.has(client.user);
-  const isDM = message.channel.type === 1;
-  // ... senin mevcut kodun devam ediyor
   const isDM = message.channel.type === 1;
 
   if (!isMentioned && !isDM) return;
@@ -456,42 +465,6 @@ client.on(Events.MessageCreate, async (message) => {
     }
     return;
   }
-
- async function istiklalMarsiOkuKomutu(message) {
-  const voiceChannel = message.member?.voice?.channel;
-
-  if (!voiceChannel) {
-    return message.reply("Önce bir ses kanalına gir.");
-  }
-
-  await message.reply("🇹🇷 İstiklal Marşı okunuyor!");
-
-  try {
-    const connection = await baglantiyiAlVeyaKur(message, voiceChannel);
-
-    // Shorts linki de çalışır
-    const stream = await play.stream("www.youtube.com/shorts/SqMk80ptreI");
-
-    const resource = createAudioResource(stream.stream, {
-      inputType: stream.type,
-    });
-
-    const player = createAudioPlayer();
-
-    connection.subscribe(player);
-    player.play(resource);
-
-    player.on("error", console.error);
-
-    player.once(AudioPlayerStatus.Idle, () => {
-      player.stop();
-    });
-
-  } catch (err) {
-    console.error(err);
-    message.channel.send("İstiklal Marşı çalınamadı.");
-  }
-}
 
   const userId = message.author.id;
   const discordUsername = message.author.username;
