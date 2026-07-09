@@ -7,6 +7,8 @@
 //                              kadrona (biriktirdiğin oyuncu havuzuna) ekler.
 //   !!kadro                 → Şu ana kadar topladığın oyuncuları listeler.
 //   !!takım                 → İlk 11'ini saha şeması gibi gösterir.
+//   !!otomatik               → Kadrondaki oyunculardan gerçek mevkilerine
+//                              göre otomatik en iyi ilk 11'i kurar.
 //   !!kaleci <isim>          !!stoper <isim>       !!sagbek <isim>
 //   !!solbek <isim>          !!defansiorta <isim>  !!ofansiorta <isim>
 //   !!sagkanat <isim>        !!solkanat <isim>     !!forvet <isim>
@@ -386,10 +388,7 @@ function formasyonSatirOlustur(formasyon, slotlar) {
     .join("   |   ");
 }
 
-async function takimGosterKomutu(message, hedefUye) {
-  const uye = hedefUye || message.author;
-  const formasyon = kullaniciFormasyonu(uye.id);
-
+function takimEmbedOlustur(uye, formasyon, baslikOnEki, ozelFooter) {
   const satirlar = [
     `**FORVET**\n${formasyonSatirOlustur(formasyon, ["ST1", "ST2"])}`,
     `**KANATLAR**\n${formasyonSatirOlustur(formasyon, ["LW", "RW"])}`,
@@ -401,16 +400,125 @@ async function takimGosterKomutu(message, hedefUye) {
 
   const doluSlotSayisi = FORMASYON_SIRA.filter((s) => formasyon[s]).length;
 
-  const embed = new EmbedBuilder()
+  return new EmbedBuilder()
     .setColor(0x1abc9c)
-    .setTitle(`⚽ ${uye.username} — İlk 11 (${doluSlotSayisi}/11)`)
+    .setTitle(`⚽ ${baslikOnEki || ""}${uye.username} — İlk 11 (${doluSlotSayisi}/11)`)
     .setDescription(satirlar.join("\n\n"))
     .setFooter({
       text:
-        doluSlotSayisi < 11
+        ozelFooter ||
+        (doluSlotSayisi < 11
           ? "Takımın tam değil, mevki komutlarıyla eksikleri tamamla."
-          : "Takımın tam, artık !!mac @biri diyerek maç yapabilirsin.",
+          : "Takımın tam, artık !!mac @biri diyerek maç yapabilirsin."),
     });
+}
+
+async function takimGosterKomutu(message, hedefUye) {
+  const uye = hedefUye || message.author;
+  const formasyon = kullaniciFormasyonu(uye.id);
+  const embed = takimEmbedOlustur(uye, formasyon);
+  await message.reply({ embeds: [embed] });
+}
+
+// ─── !!otomatik — Otomatik Takım Kurulumu ────────────────────────────────────
+// Kadrondaki oyuncuları gerçek mevkilerine göre en iyi ilk 11'e otomatik
+// yerleştirir. Bir mevki için gerçek mevkisi uyan oyuncu yoksa, ikinci
+// aşamada kalan en güçlü oyuncularla boş kalan yerler doldurulur.
+
+const POZISYON_KATEGORI_HARITASI = {
+  GK: "GK",
+  CB: "CB", RCB: "CB", LCB: "CB", SW: "CB",
+  RB: "RB", RWB: "RB",
+  LB: "LB", LWB: "LB",
+  CDM: "CDM", RDM: "CDM", LDM: "CDM",
+  CM: "CM", RCM: "CM", LCM: "CM",
+  CAM: "CAM", RAM: "CAM", LAM: "CAM",
+  RM: "RW", RW: "RW", RF: "RW",
+  LM: "LW", LW: "LW", LF: "LW",
+  ST: "ST", CF: "ST",
+};
+
+function pozisyonKategorisi(pos) {
+  return POZISYON_KATEGORI_HARITASI[(pos || "").toUpperCase()] || "DIGER";
+}
+
+// Her slotun kabul ettiği kategoriler, öncelik sırasına göre.
+// CM (merkez orta saha) hem CDM hem CAM'a esnek olarak uyabilir.
+const SLOT_KABUL_EDILEN_KATEGORILER = {
+  GK: ["GK"],
+  CB1: ["CB"],
+  CB2: ["CB"],
+  LB: ["LB"],
+  RB: ["RB"],
+  CDM: ["CDM", "CM"],
+  CAM: ["CAM", "CM"],
+  RW: ["RW"],
+  LW: ["LW"],
+  ST1: ["ST"],
+  ST2: ["ST"],
+};
+
+// Doldurma sırası: en kısıtlı/kritik mevkiler önce (kaleci, sonra defans...)
+const OTOMATIK_DOLDURMA_SIRASI = [
+  "GK", "CB1", "CB2", "LB", "RB", "CDM", "CAM", "RW", "LW", "ST1", "ST2",
+];
+
+function otomatikFormasyonHesapla(userId) {
+  const kadro = kullaniciKadrosu(userId);
+  const siraliKadro = [...kadro].sort((a, b) => b.power - a.power);
+  const kullanilan = new Set();
+  const yeniFormasyon = {};
+
+  // 1. Aşama: her slotu gerçek mevkisine en uygun, kadrondaki en güçlü
+  // oyuncuyla doldurmaya çalış.
+  for (const slot of OTOMATIK_DOLDURMA_SIRASI) {
+    const kabulEdilenler = SLOT_KABUL_EDILEN_KATEGORILER[slot];
+    const secilen = siraliKadro.find(
+      (o) => !kullanilan.has(o) && kabulEdilenler.includes(pozisyonKategorisi(o.position))
+    );
+    if (secilen) {
+      yeniFormasyon[slot] = secilen;
+      kullanilan.add(secilen);
+    } else {
+      yeniFormasyon[slot] = null;
+    }
+  }
+
+  // 2. Aşama: gerçek mevkisi uymadığı için boş kalan slotları, kadronun
+  // geri kalan en güçlü oyuncularıyla (mevki fark etmeksizin) doldur.
+  for (const slot of OTOMATIK_DOLDURMA_SIRASI) {
+    if (yeniFormasyon[slot]) continue;
+    const secilen = siraliKadro.find((o) => !kullanilan.has(o));
+    if (secilen) {
+      yeniFormasyon[slot] = secilen;
+      kullanilan.add(secilen);
+    }
+  }
+
+  return yeniFormasyon;
+}
+
+async function otomatikKurKomutu(message) {
+  const userId = message.author.id;
+  const kadro = kullaniciKadrosu(userId);
+
+  if (kadro.length < 11) {
+    await message.reply(
+      `Otomatik takım kurmak için en az 11 oyuncuya ihtiyacın var, şu an kadronda ${kadro.length} oyuncu var. \`!!oyuncu\` yazarak daha fazla çek.`
+    );
+    return;
+  }
+
+  const yeniFormasyon = otomatikFormasyonHesapla(userId);
+  futbolData.formasyonlar[userId] = yeniFormasyon;
+  veriKaydet();
+
+  const embed = takimEmbedOlustur(
+    message.author,
+    yeniFormasyon,
+    "Otomatik Kuruldu: ",
+    "Mevkiler gerçek pozisyonlara göre otomatik ayarlandı, istersen mevki komutlarıyla elle değiştirebilirsin."
+  );
 
   await message.reply({ embeds: [embed] });
 }
@@ -590,6 +698,7 @@ async function yardimKomutu(message) {
         "`!!oyuncu` — günlük 20 oyuncu çek",
         "`!!kadro` — topladığın oyuncuları gör",
         "`!!takım` — ilk 11'ini gör",
+        "`!!otomatik` — kadrondaki en iyi 11'i otomatik kurar (gerçek mevkilere göre)",
         "`!!kaleci <isim>`, `!!stoper <isim>`, `!!sagbek <isim>`, `!!solbek <isim>`",
         "`!!defansiorta <isim>`, `!!ofansiorta <isim>`, `!!sagkanat <isim>`, `!!solkanat <isim>`, `!!forvet <isim>`",
         "`!!cikar <mevki>` — bir mevkiyi boşalt (örn: forvet1, stoper2)",
@@ -628,6 +737,11 @@ async function futbolMesajIsleyici(message) {
     if (komutAdi === "takim") {
       const hedefUye = message.mentions.users.first();
       await takimGosterKomutu(message, hedefUye);
+      return true;
+    }
+
+    if (komutAdi === "otomatik" || komutAdi === "ototakim") {
+      await otomatikKurKomutu(message);
       return true;
     }
 
