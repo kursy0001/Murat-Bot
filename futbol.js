@@ -701,27 +701,6 @@ async function macKomutu(message, rakipUye) {
 
   await message.reply({ embeds: [embed] });
 
-
-
-  let sonucMesaji;
-  if (benimGol > rakipGol) {
-    benimPuan.galibiyet++;
-    benimPuan.puan += 3;
-    rakipPuan.maglubiyet++;
-    sonucMesaji = `🏆 **${message.author.username}** kazandı! +3 puan.`;
-  } else if (benimGol < rakipGol) {
-    rakipPuan.galibiyet++;
-    rakipPuan.puan += 3;
-    benimPuan.maglubiyet++;
-    sonucMesaji = `🏆 **${rakipUye.username}** kazandı! +3 puan.`;
-  } else {
-    benimPuan.beraberlik++;
-    rakipPuan.beraberlik++;
-    benimPuan.puan += 1;
-    rakipPuan.puan += 1;
-    sonucMesaji = "🤝 Berabere kaldınız, ikinize de +1 puan.";
-  }
-
   veriKaydet();
 }
 
