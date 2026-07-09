@@ -552,6 +552,43 @@ function poissonOrneklem(lambda) {
   } while (p > L);
   return k - 1;
 }
+// ─── Gol Atan Oyuncuyu Ağırlıklı Seç ─────────────────────────────────────────
+// Forvetler ve kanatlar gol atma ihtimali en yüksek olanlar, defans/kaleci
+// nadiren de olsa gol atabilir (mucize gol).
+const GOLCU_AGIRLIK = {
+  ST1: 26, ST2: 26,
+  LW: 15, RW: 15,
+  CAM: 12,
+  CDM: 4,
+  LB: 1, RB: 1,
+  CB1: 0.5, CB2: 0.5,
+  GK: 0.1,
+};
+
+function agirlikliGolcuSec(formasyon) {
+  const adaylar = FORMASYON_SIRA.filter((slot) => formasyon[slot]);
+  const toplamAgirlik = adaylar.reduce((t, slot) => t + (GOLCU_AGIRLIK[slot] || 1), 0);
+  let rastgele = Math.random() * toplamAgirlik;
+
+  for (const slot of adaylar) {
+    rastgele -= GOLCU_AGIRLIK[slot] || 1;
+    if (rastgele <= 0) return formasyon[slot];
+  }
+  return formasyon[adaylar[adaylar.length - 1]];
+}
+
+// golSayisi kadar gol olayı üretir: { dakika, oyuncu, takim: "ev" | "deplasman" }
+function golOlaylariUret(formasyon, golSayisi, takimEtiketi) {
+  const olaylar = [];
+  for (let i = 0; i < golSayisi; i++) {
+    olaylar.push({
+      dakika: Math.floor(Math.random() * 90) + 1,
+      oyuncu: agirlikliGolcuSec(formasyon),
+      takim: takimEtiketi,
+    });
+  }
+  return olaylar;
+}
 
 function beklenenGolSayisi(hucumGucu, defansGucu) {
   const fark = hucumGucu - defansGucu;
@@ -597,8 +634,73 @@ async function macKomutu(message, rakipUye) {
   const benimBeklenenGol = beklenenGolSayisi(benimGucler.hucum, rakipGucler.defans);
   const rakipBeklenenGol = beklenenGolSayisi(rakipGucler.hucum, benimGucler.defans);
 
+
   const benimGol = poissonOrneklem(benimBeklenenGol);
   const rakipGol = poissonOrneklem(rakipBeklenenGol);
+
+  // ── Gol Olaylarını Üret ve Dakikaya Göre Sırala ──
+  const benimGoller = golOlaylariUret(benimFormasyon, benimGol, "ev");
+  const rakipGoller = golOlaylariUret(rakipFormasyon, rakipGol, "deplasman");
+  const tumGoller = [...benimGoller, ...rakipGoller].sort((a, b) => a.dakika - b.dakika);
+
+  let evSkor = 0;
+  let depSkor = 0;
+  const zamanCizelgesi = tumGoller.map((golOlayi) => {
+    if (golOlayi.takim === "ev") evSkor++;
+    else depSkor++;
+    return `\`${golOlayi.dakika}'\` ⚽ **${golOlayi.oyuncu.name}** golü buldu! (${evSkor}-${depSkor})`;
+  });
+
+  const golAnlatimi =
+    zamanCizelgesi.length > 0
+      ? zamanCizelgesi.join("\n")
+      : "90 dakika boyunca gol sesi çıkmadı, iki kale de sağlam kaldı.";
+
+  const benimPuan = kullaniciPuani(atanUserId);
+  const rakipPuan = kullaniciPuani(rakipUye.id);
+
+  let sonucMesaji;
+  if (benimGol > rakipGol) {
+    benimPuan.galibiyet++;
+    benimPuan.puan += 3;
+    rakipPuan.maglubiyet++;
+    sonucMesaji = `🏆 **${message.author.username}** kazandı! +3 puan.`;
+  } else if (benimGol < rakipGol) {
+    rakipPuan.galibiyet++;
+    rakipPuan.puan += 3;
+    benimPuan.maglubiyet++;
+    sonucMesaji = `🏆 **${rakipUye.username}** kazandı! +3 puan.`;
+  } else {
+    benimPuan.beraberlik++;
+    rakipPuan.beraberlik++;
+    benimPuan.puan += 1;
+    rakipPuan.puan += 1;
+    sonucMesaji = "🤝 Berabere kaldınız, ikinize de +1 puan.";
+  }
+
+  veriKaydet();
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1abc9c)
+    .setTitle("⚽ MAÇ SONUCU")
+    .setDescription(
+      `**${message.author.username}**  ${benimGol} — ${rakipGol}  **${rakipUye.username}**\n\n${golAnlatimi}\n\n${sonucMesaji}`
+    )
+    .addFields(
+      {
+        name: message.author.username,
+        value: `Hücum: ${benimGucler.hucum.toFixed(1)}\nDefans: ${benimGucler.defans.toFixed(1)}`,
+        inline: true,
+      },
+      {
+        name: rakipUye.username,
+        value: `Hücum: ${rakipGucler.hucum.toFixed(1)}\nDefans: ${rakipGucler.defans.toFixed(1)}`,
+        inline: true,
+      }
+    );
+
+  await message.reply({ embeds: [embed] });
+
 
   const benimPuan = kullaniciPuani(atanUserId);
   const rakipPuan = kullaniciPuani(rakipUye.id);
