@@ -5,7 +5,8 @@
 // KOMUTLAR:
 //   !!oyuncu                → Günde 1 kere 20 rastgele gerçek futbolcu çeker,
 //                              kadrona (biriktirdiğin oyuncu havuzuna) ekler.
-//   !!kadro                 → Şu ana kadar topladığın oyuncuları listeler.
+//   !!kadro                 → En iyi 20 oyuncunu SAYFA SAYFA gösterir
+//                              (mesajın altındaki ◀️ ▶️ emojilerine basarak gezinilir).
 //   !!takım                 → İlk 11'ini saha şeması gibi gösterir.
 //   !!otomatik               → Kadrondaki oyunculardan gerçek mevkilerine
 //                              göre otomatik en iyi ilk 11'i kurar.
@@ -18,9 +19,16 @@
 //   !!cikar <mevki>          → Bir mevkiyi boşaltır (örn: !!cikar forvet1)
 //   !!mac @kullanici          !!maç @kullanici
 //                              → Rakibe meydan okur, iki takımın ilk 11'i
-//                                tamsa maçı oynatır, kazanana puan yazar.
+//                                tamsa maçı oynatır, kazanana puan + PARA verir.
 //   !!puan                   → Kendi puan durumunu gösterir.
 //   !!puanlar                → Sunucu lig tablosunu (top 10) gösterir.
+//   !!bakiye  !!para          → Kendi Euro bakiyeni gösterir.
+//   !!satisa <isim> <fiyat>   → Kadrondaki bir oyuncuyu piyasaya çıkarır.
+//                                 (örn: !!satisa Erling Haaland 850000)
+//   !!piyasa                  → Satıştaki tüm oyuncuları SAYFA SAYFA gösterir.
+//   !!satinal <isim>          → Piyasadaki bir oyuncuyu satın alır, para el
+//                                 değiştirir, oyuncu kadronuza geçer.
+//   !!satisiptal <isim>       → Kendi ilanını piyasadan geri çeker.
 //   !!futboly yardim          !!futbolyardim
 //                              → Komut listesini gösterir.
 //
@@ -30,9 +38,25 @@
 //   dahil edildi, bot çalışırken tekrar internete gitmesi gerekmiyor.
 //
 // KALICI VERİ:
-//   futbol_data.json dosyasında her kullanıcının kadrosu, ilk 11'i, puanı ve
-//   günlük çekiliş tarihi tutulur. user_profiles.json ile aynı mantıkla
-//   çalışır (basit dosya tabanlı JSON depolama).
+//   futbol_data.json dosyasında her kullanıcının kadrosu, ilk 11'i, puanı,
+//   parası, piyasa ilanları ve günlük çekiliş tarihi tutulur. user_profiles.json
+//   ile aynı mantıkla çalışır (basit dosya tabanlı JSON depolama).
+//
+// ÖNEMLİ — REACTION (EMOJİ) TABANLI SAYFALAMA İÇİN GEREKEN INTENT:
+//   Discord Developer Portal'da botunun "Message Content Intent" zaten
+//   açık olmalı (Murat için muhtemelen zaten açık). Ayrıca client'ı
+//   oluştururken intents listesine şunu eklemen gerekiyor, yoksa ◀️ ▶️
+//   emojilerine basınca sayfa değişmez:
+//       GatewayIntentBits.GuildMessageReactions
+//   index.js'deki client oluşturma kısmı örneğin şöyle olmalı:
+//       const client = new Client({
+//         intents: [
+//           GatewayIntentBits.Guilds,
+//           GatewayIntentBits.GuildMessages,
+//           GatewayIntentBits.MessageContent,
+//           GatewayIntentBits.GuildMessageReactions, // <-- bunu ekle
+//         ],
+//       });
 //
 // ENTEGRASYON:
 //   Ana bot dosyanda (index.js) en üste:
@@ -47,6 +71,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { EmbedBuilder } = require("discord.js");
 
 const OYUNCU_HAVUZU_DOSYASI = path.join(__dirname, "futbol_oyuncular.json");
@@ -54,6 +79,7 @@ const FUTBOL_DATA_DOSYASI = path.join(__dirname, "futbol_data.json");
 
 const GUNLUK_OYUNCU_SAYISI = 20;
 const PREFIX = "!!";
+const BASLANGIC_PARA = 1_000_000; // yeni kullanıcının başlangıç bakiyesi (€)
 
 // ─── Mevki Şeması ──────────────────────────────────────────────────────────
 // Sıra, sahada yukarıdan (forvet) aşağıya (kaleci) doğru gösterim sırası.
@@ -123,14 +149,16 @@ try {
   console.error("[Futbol] Oyuncu havuzu yüklenemedi:", err.message);
 }
 
-// ─── Kalıcı Veri (kadrolar, takımlar, puanlar) ───────────────────────────────
+// ─── Kalıcı Veri (kadrolar, takımlar, puanlar, paralar, piyasa) ──────────────
 
 function bosVeri() {
   return {
-    kadrolar: {}, // userId -> [ {name, position, power, club, nationality} ]
+    kadrolar: {}, // userId -> [ {id, name, position, power, club, nationality} ]
     formasyonlar: {}, // userId -> { GK: oyuncu|null, CB1: ..., ... }
     puanlar: {}, // userId -> { galibiyet, beraberlik, maglubiyet, puan }
     gunlukCekilis: {}, // userId -> "YYYY-MM-DD" (son çekiliş tarihi)
+    paralar: {}, // userId -> number (Euro bakiye)
+    piyasa: [], // [ {id, saticiId, oyuncuId, oyuncu, fiyat, tarih} ]
   };
 }
 
@@ -179,6 +207,25 @@ function kullaniciPuani(userId) {
   return futbolData.puanlar[userId];
 }
 
+function kullaniciParasi(userId) {
+  if (futbolData.paralar[userId] === undefined) {
+    futbolData.paralar[userId] = BASLANGIC_PARA;
+  }
+  return futbolData.paralar[userId];
+}
+
+function paraEkle(userId, miktar) {
+  futbolData.paralar[userId] = kullaniciParasi(userId) + Math.round(miktar);
+}
+
+function paraCikar(userId, miktar) {
+  futbolData.paralar[userId] = kullaniciParasi(userId) - Math.round(miktar);
+}
+
+function paraFormatla(miktar) {
+  return `${Math.round(miktar).toLocaleString("tr-TR")} €`;
+}
+
 function bugununTarihi() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
@@ -212,6 +259,70 @@ function kadrodaOyuncuAra(userId, arananIsim) {
   if (tamEslesme.length > 0) return tamEslesme;
 
   return kadro.filter((o) => normalizeAd(o.name).includes(hedef));
+}
+
+// ─── Genel Sayfalama (Reaction / Emoji ile ◀️ ▶️) ────────────────────────────
+// sayfaOlusturucular: her biri (sayfaNo, toplamSayfa) => EmbedBuilder döndüren
+// fonksiyonlardan oluşan bir dizi. Her fonksiyon bir sayfayı temsil eder.
+
+async function sayfaliGonder(message, sayfaOlusturucular, sure = 120000) {
+  const toplamSayfa = sayfaOlusturucular.length;
+  if (toplamSayfa === 0) return null;
+
+  let mevcutSayfa = 0;
+  const mesaj = await message.reply({
+    embeds: [sayfaOlusturucular[mevcutSayfa](mevcutSayfa, toplamSayfa)],
+  });
+
+  if (toplamSayfa <= 1) return mesaj;
+
+  try {
+    await mesaj.react("◀️");
+    await mesaj.react("▶️");
+  } catch (err) {
+    // botun reaction ekleme izni yoksa sessizce geç, mesaj tek sayfa gibi kalır
+    return mesaj;
+  }
+
+  const filtre = (tepki, kullanici) =>
+    ["◀️", "▶️"].includes(tepki.emoji.name) && kullanici.id === message.author.id;
+
+  let toplayici;
+  try {
+    toplayici = mesaj.createReactionCollector({ filter: filtre, time: sure });
+  } catch (err) {
+    return mesaj;
+  }
+
+  toplayici.on("collect", async (tepki, kullanici) => {
+    if (tepki.emoji.name === "▶️") {
+      mevcutSayfa = (mevcutSayfa + 1) % toplamSayfa;
+    } else {
+      mevcutSayfa = (mevcutSayfa - 1 + toplamSayfa) % toplamSayfa;
+    }
+
+    try {
+      await mesaj.edit({ embeds: [sayfaOlusturucular[mevcutSayfa](mevcutSayfa, toplamSayfa)] });
+    } catch (err) {
+      // mesaj silinmiş olabilir, önemli değil
+    }
+
+    try {
+      await tepki.users.remove(kullanici.id);
+    } catch (err) {
+      // botun "Reaksiyonları Yönet" izni yoksa (örn. DM) görmezden gel
+    }
+  });
+
+  toplayici.on("end", async () => {
+    try {
+      await mesaj.reactions.removeAll();
+    } catch (err) {
+      // izin yoksa görmezden gel
+    }
+  });
+
+  return mesaj;
 }
 
 // ─── !!oyuncu — Günlük Oyuncu Çekilişi ───────────────────────────────────────
@@ -254,7 +365,11 @@ async function oyuncuCekKomutu(message) {
     }
   }
 
-  for (const oyuncu of secilenler) kadro.push(oyuncu);
+  // Her oyuncu kopyasına benzersiz bir id veriyoruz — transfer piyasasında
+  // ve mevki atamalarında aynı isimli oyuncuları birbirinden ayırt etmek için.
+  for (const oyuncu of secilenler) {
+    kadro.push({ ...oyuncu, id: crypto.randomUUID() });
+  }
 
   futbolData.gunlukCekilis[userId] = bugun;
   veriKaydet();
@@ -275,7 +390,7 @@ async function oyuncuCekKomutu(message) {
   await message.reply({ embeds: [embed] });
 }
 
-// ─── !!kadro — Toplanan Oyuncuları Listele ───────────────────────────────────
+// ─── !!kadro — En İyi 20 Oyuncuyu Sayfa Sayfa Göster ─────────────────────────
 
 async function kadroGosterKomutu(message) {
   const userId = message.author.id;
@@ -286,23 +401,31 @@ async function kadroGosterKomutu(message) {
     return;
   }
 
-  const siraliListe = [...kadro].sort((a, b) => b.power - a.power);
-  const gosterilecek = siraliListe.slice(0, 30);
+  const enIyi20 = [...kadro].sort((a, b) => b.power - a.power).slice(0, 20);
+  const SAYFA_BASI = 5;
+  const gruplar = [];
+  for (let i = 0; i < enIyi20.length; i += SAYFA_BASI) {
+    gruplar.push(enIyi20.slice(i, i + SAYFA_BASI));
+  }
 
-  const aciklama = gosterilecek
-    .map((o) => `${o.name} — \`${o.position}\` — Güç: **${o.power}**`)
-    .join("\n");
+  const sayfaOlusturucular = gruplar.map((grup, grupIndex) => (sayfaNo, toplam) => {
+    const aciklama = grup
+      .map((o, i) => {
+        const siraNo = grupIndex * SAYFA_BASI + i + 1;
+        return `**${siraNo}.** ${o.name} — \`${o.position}\` — Güç: **${o.power}**\n🏟️ ${o.club || "?"} · 🌍 ${o.nationality || "?"}`;
+      })
+      .join("\n\n");
 
-  const embed = new EmbedBuilder()
-    .setColor(0x1abc9c)
-    .setTitle(`⚽ Kadron (${kadro.length} oyuncu)`)
-    .setDescription(
-      kadro.length > 30
-        ? `${aciklama}\n\n...ve ${kadro.length - 30} oyuncu daha (en güçlü 30 tanesi gösteriliyor).`
-        : aciklama
-    );
+    return new EmbedBuilder()
+      .setColor(0x1abc9c)
+      .setTitle(`⚽ ${message.author.username} — En İyi 20 Oyuncu (${kadro.length} toplam)`)
+      .setDescription(aciklama)
+      .setFooter({
+        text: `Sayfa ${sayfaNo + 1}/${toplam} · ◀️ ▶️ ile gezin · Bakiye: ${paraFormatla(kullaniciParasi(userId))}`,
+      });
+  });
 
-  await message.reply({ embeds: [embed] });
+  await sayfaliGonder(message, sayfaOlusturucular);
 }
 
 // ─── Mevki Yerleştirme Komutları (!!forvet, !!kaleci, vb.) ──────────────────
@@ -552,6 +675,7 @@ function poissonOrneklem(lambda) {
   } while (p > L);
   return k - 1;
 }
+
 // ─── Gol Atan Oyuncuyu Ağırlıklı Seç ─────────────────────────────────────────
 // Forvetler ve kanatlar gol atma ihtimali en yüksek olanlar, defans/kaleci
 // nadiren de olsa gol atabilir (mucize gol).
@@ -598,6 +722,59 @@ function beklenenGolSayisi(hucumGucu, defansGucu) {
   return beklenen;
 }
 
+// ─── Maç Gerçekçilik Katmanı: Topa Hakimiyet / İsabetli Şut / Maçın Yıldızı ──
+
+function topaHakimiyetHesapla(hucum1, defans1, hucum2, defans2) {
+  const guc1 = hucum1 * 0.6 + defans1 * 0.4;
+  const guc2 = hucum2 * 0.6 + defans2 * 0.4;
+  const toplam = guc1 + guc2;
+  if (toplam === 0) return [50, 50];
+
+  let yuzde1 = Math.round((guc1 / toplam) * 100);
+  // Aşırı keskin olmasın diye biraz rastgelelik ekle, ama makul aralıkta tut
+  yuzde1 = Math.max(28, Math.min(72, yuzde1 + Math.floor(Math.random() * 11) - 5));
+  return [yuzde1, 100 - yuzde1];
+}
+
+function isabetliSutHesapla(golSayisi, hucumGucu) {
+  const ekBaz = 2 + Math.round(hucumGucu / 25);
+  return golSayisi + Math.floor(Math.random() * ekBaz) + Math.floor(Math.random() * 3);
+}
+
+function macinYildiziniSec(benimGoller, rakipGoller, benimFormasyon, rakipFormasyon) {
+  const tumGoller = [...benimGoller, ...rakipGoller];
+
+  if (tumGoller.length > 0) {
+    const golSayaci = new Map();
+    for (const golOlayi of tumGoller) {
+      golSayaci.set(golOlayi.oyuncu, (golSayaci.get(golOlayi.oyuncu) || 0) + 1);
+    }
+    let enCokGolAtan = null;
+    let enCokGolSayisi = 0;
+    for (const [oyuncu, sayi] of golSayaci) {
+      if (sayi > enCokGolSayisi) {
+        enCokGolAtan = oyuncu;
+        enCokGolSayisi = sayi;
+      }
+    }
+    if (enCokGolAtan) {
+      return { oyuncu: enCokGolAtan, sebep: enCokGolSayisi > 1 ? `${enCokGolSayisi} gol` : "1 gol" };
+    }
+  }
+
+  // Gol yoksa (0-0), en güçlü 3 oyuncudan rastgele biri "sağlam performans" alır
+  const tumOyuncular = [
+    ...FORMASYON_SIRA.map((s) => benimFormasyon[s]),
+    ...FORMASYON_SIRA.map((s) => rakipFormasyon[s]),
+  ].filter(Boolean);
+
+  if (tumOyuncular.length === 0) return null;
+
+  const enGucluler = [...tumOyuncular].sort((a, b) => b.power - a.power).slice(0, 3);
+  const secilen = enGucluler[Math.floor(Math.random() * enGucluler.length)];
+  return secilen ? { oyuncu: secilen, sebep: "sağlam performans" } : null;
+}
+
 // ─── !!mac — Maç Simülasyonu ──────────────────────────────────────────────────
 
 async function macKomutu(message, rakipUye) {
@@ -634,7 +811,6 @@ async function macKomutu(message, rakipUye) {
   const benimBeklenenGol = beklenenGolSayisi(benimGucler.hucum, rakipGucler.defans);
   const rakipBeklenenGol = beklenenGolSayisi(rakipGucler.hucum, benimGucler.defans);
 
-
   const benimGol = poissonOrneklem(benimBeklenenGol);
   const rakipGol = poissonOrneklem(rakipBeklenenGol);
 
@@ -656,52 +832,90 @@ async function macKomutu(message, rakipUye) {
       ? zamanCizelgesi.join("\n")
       : "90 dakika boyunca gol sesi çıkmadı, iki kale de sağlam kaldı.";
 
+  // ── Gerçekçilik Katmanı: Hakimiyet, İsabetli Şut, Maçın Yıldızı ──
+  const [benimHakimiyet, rakipHakimiyet] = topaHakimiyetHesapla(
+    benimGucler.hucum, benimGucler.defans, rakipGucler.hucum, rakipGucler.defans
+  );
+  const benimIsabet = isabetliSutHesapla(benimGol, benimGucler.hucum);
+  const rakipIsabet = isabetliSutHesapla(rakipGol, rakipGucler.hucum);
+  const yildiz = macinYildiziniSec(benimGoller, rakipGoller, benimFormasyon, rakipFormasyon);
+
+  // ── Puan + Para Dağıtımı ──
   const benimPuan = kullaniciPuani(atanUserId);
   const rakipPuan = kullaniciPuani(rakipUye.id);
 
+  const toplamGucBen = benimGucler.hucum + benimGucler.defans;
+  const toplamGucRakip = rakipGucler.hucum + rakipGucler.defans;
+  const sürprizBonus = Math.abs(toplamGucBen - toplamGucRakip) > 8 ? 1.25 : 1;
+
   let sonucMesaji;
+  let benimOdul = 0;
+  let rakipOdul = 0;
+
   if (benimGol > rakipGol) {
     benimPuan.galibiyet++;
     benimPuan.puan += 3;
     rakipPuan.maglubiyet++;
-    sonucMesaji = `🏆 **${message.author.username}** kazandı! +3 puan.`;
+    const zayifMiydi = toplamGucBen < toplamGucRakip;
+    benimOdul = Math.round((50000 + Math.random() * 100000) * (zayifMiydi ? sürprizBonus : 1));
+    rakipOdul = Math.round(5000 + Math.random() * 10000);
+    sonucMesaji = `🏆 **${message.author.username}** kazandı! +3 puan ve **${paraFormatla(benimOdul)}** kazandı.`;
   } else if (benimGol < rakipGol) {
     rakipPuan.galibiyet++;
     rakipPuan.puan += 3;
     benimPuan.maglubiyet++;
-    sonucMesaji = `🏆 **${rakipUye.username}** kazandı! +3 puan.`;
+    const zayifMiydi = toplamGucRakip < toplamGucBen;
+    rakipOdul = Math.round((50000 + Math.random() * 100000) * (zayifMiydi ? sürprizBonus : 1));
+    benimOdul = Math.round(5000 + Math.random() * 10000);
+    sonucMesaji = `🏆 **${rakipUye.username}** kazandı! +3 puan ve **${paraFormatla(rakipOdul)}** kazandı.`;
   } else {
     benimPuan.beraberlik++;
     rakipPuan.beraberlik++;
     benimPuan.puan += 1;
     rakipPuan.puan += 1;
-    sonucMesaji = "🤝 Berabere kaldınız, ikinize de +1 puan.";
+    benimOdul = Math.round(20000 + Math.random() * 20000);
+    rakipOdul = Math.round(20000 + Math.random() * 20000);
+    sonucMesaji = `🤝 Berabere kaldınız, ikinize de +1 puan ve maç primi verildi.`;
   }
+
+  paraEkle(atanUserId, benimOdul);
+  paraEkle(rakipUye.id, rakipOdul);
 
   veriKaydet();
 
+  const renk = benimGol === rakipGol ? 0xf1c40f : 0x2ecc71;
+
   const embed = new EmbedBuilder()
-    .setColor(0x1abc9c)
+    .setColor(renk)
     .setTitle("⚽ MAÇ SONUCU")
     .setDescription(
       `**${message.author.username}**  ${benimGol} — ${rakipGol}  **${rakipUye.username}**\n\n${golAnlatimi}\n\n${sonucMesaji}`
     )
     .addFields(
       {
-        name: message.author.username,
-        value: `Hücum: ${benimGucler.hucum.toFixed(1)}\nDefans: ${benimGucler.defans.toFixed(1)}`,
+        name: `📊 ${message.author.username}`,
+        value: `Hücum: **${benimGucler.hucum.toFixed(1)}**\nDefans: **${benimGucler.defans.toFixed(1)}**\nTopa Hakimiyet: **%${benimHakimiyet}**\nİsabetli Şut: **${benimIsabet}**\n💰 Kazanç: ${paraFormatla(benimOdul)}`,
         inline: true,
       },
       {
-        name: rakipUye.username,
-        value: `Hücum: ${rakipGucler.hucum.toFixed(1)}\nDefans: ${rakipGucler.defans.toFixed(1)}`,
+        name: `📊 ${rakipUye.username}`,
+        value: `Hücum: **${rakipGucler.hucum.toFixed(1)}**\nDefans: **${rakipGucler.defans.toFixed(1)}**\nTopa Hakimiyet: **%${rakipHakimiyet}**\nİsabetli Şut: **${rakipIsabet}**\n💰 Kazanç: ${paraFormatla(rakipOdul)}`,
         inline: true,
       }
     );
 
-  await message.reply({ embeds: [embed] });
+  if (yildiz) {
+    embed.addFields({
+      name: "⭐ Maçın Yıldızı",
+      value: `**${yildiz.oyuncu.name}** (${yildiz.sebep})`,
+    });
+  }
 
-  veriKaydet();
+  embed.setFooter({
+    text: `Güncel bakiye — ${message.author.username}: ${paraFormatla(kullaniciParasi(atanUserId))} · ${rakipUye.username}: ${paraFormatla(kullaniciParasi(rakipUye.id))}`,
+  });
+
+  await message.reply({ embeds: [embed] });
 }
 
 // ─── !!puan / !!puanlar ──────────────────────────────────────────────────────
@@ -745,6 +959,221 @@ async function puanTablosuKomutu(message) {
   await message.reply({ embeds: [embed] });
 }
 
+// ─── !!bakiye / !!para ────────────────────────────────────────────────────────
+
+async function bakiyeGosterKomutu(message) {
+  await message.reply(
+    `💰 **${message.author.username}** — Bakiye: **${paraFormatla(kullaniciParasi(message.author.id))}**`
+  );
+}
+
+// ─── !!satisa — Piyasaya Oyuncu Çıkar ────────────────────────────────────────
+
+async function satisaCikarKomutu(message, argStr) {
+  const userId = message.author.id;
+
+  if (!argStr) {
+    await message.reply("Kullanım: `!!satisa <oyuncu ismi> <fiyat>` (örn: `!!satisa Erling Haaland 850000`)");
+    return;
+  }
+
+  const eslesme = argStr.match(/^(.+?)\s+([\d.,]+)\s*€?$/);
+  if (!eslesme) {
+    await message.reply("Fiyatı doğru yazmadın. Kullanım: `!!satisa <oyuncu ismi> <fiyat>`");
+    return;
+  }
+
+  const isim = eslesme[1].trim();
+  const fiyat = parseInt(eslesme[2].replace(/[.,]/g, ""), 10);
+
+  if (!fiyat || fiyat <= 0) {
+    await message.reply("Geçerli bir fiyat yaz (örn: 500000).");
+    return;
+  }
+
+  const eslesmeler = kadrodaOyuncuAra(userId, isim);
+
+  if (eslesmeler.length === 0) {
+    await message.reply(`Kadronda "${isim}" diye biri yok.`);
+    return;
+  }
+  if (eslesmeler.length > 1) {
+    const secenekler = eslesmeler.slice(0, 8).map((o) => `${o.name} (${o.club})`).join(", ");
+    await message.reply(`Birden fazla eşleşme buldum, daha net yaz: ${secenekler}`);
+    return;
+  }
+
+  const oyuncu = eslesmeler[0];
+
+  const zatenListelenmis = futbolData.piyasa.find((ilan) => ilan.oyuncuId === oyuncu.id);
+  if (zatenListelenmis) {
+    await message.reply(`${oyuncu.name} zaten piyasada, önce \`!!satisiptal ${oyuncu.name}\` ile geri çek.`);
+    return;
+  }
+
+  futbolData.piyasa.push({
+    id: crypto.randomUUID(),
+    saticiId: userId,
+    oyuncuId: oyuncu.id,
+    oyuncu,
+    fiyat,
+    tarih: bugununTarihi(),
+  });
+
+  veriKaydet();
+
+  await message.reply(
+    `📤 **${oyuncu.name}** (Güç: ${oyuncu.power}) piyasaya **${paraFormatla(fiyat)}** fiyatla kondu. \`!!piyasa\` yazarak listeyi görebilirsin.`
+  );
+}
+
+// ─── !!piyasa — Satıştaki Oyuncuları Sayfa Sayfa Göster ──────────────────────
+
+async function piyasaGosterKomutu(message) {
+  const ilanlar = futbolData.piyasa;
+
+  if (ilanlar.length === 0) {
+    await message.reply("Piyasada satılık oyuncu yok. `!!satisa <isim> <fiyat>` ile ilk ilanı sen ver.");
+    return;
+  }
+
+  const siraliIlanlar = [...ilanlar].sort((a, b) => a.fiyat - b.fiyat);
+  const SAYFA_BASI = 6;
+  const gruplar = [];
+  for (let i = 0; i < siraliIlanlar.length; i += SAYFA_BASI) {
+    gruplar.push(siraliIlanlar.slice(i, i + SAYFA_BASI));
+  }
+
+  const sayfaOlusturucular = gruplar.map((grup, grupIndex) => (sayfaNo, toplam) => {
+    const aciklama = grup
+      .map((ilan, i) => {
+        const siraNo = grupIndex * SAYFA_BASI + i + 1;
+        return `**${siraNo}.** ${ilan.oyuncu.name} — \`${ilan.oyuncu.position}\` — Güç: **${ilan.oyuncu.power}**\n💰 ${paraFormatla(ilan.fiyat)} · Satıcı: <@${ilan.saticiId}>`;
+      })
+      .join("\n\n");
+
+    return new EmbedBuilder()
+      .setColor(0xf1c40f)
+      .setTitle(`💱 Transfer Piyasası (${ilanlar.length} ilan)`)
+      .setDescription(aciklama)
+      .setFooter({
+        text: `Sayfa ${sayfaNo + 1}/${toplam} · ◀️ ▶️ ile gezin · Almak için: !!satinal <isim>`,
+      });
+  });
+
+  await sayfaliGonder(message, sayfaOlusturucular);
+}
+
+// ─── !!satinal — Piyasadan Oyuncu Satın Al ───────────────────────────────────
+
+async function satinAlKomutu(message, isim) {
+  const userId = message.author.id;
+
+  if (!isim) {
+    await message.reply("Kimi alacaksın? `!!satinal <isim>` şeklinde yaz.");
+    return;
+  }
+
+  const hedef = normalizeAd(isim);
+  const eslesmeler = futbolData.piyasa.filter((ilan) => normalizeAd(ilan.oyuncu.name).includes(hedef));
+
+  if (eslesmeler.length === 0) {
+    await message.reply(`Piyasada "${isim}" diye satılık biri yok. \`!!piyasa\` ile listeyi gör.`);
+    return;
+  }
+  if (eslesmeler.length > 1) {
+    const secenekler = eslesmeler
+      .slice(0, 8)
+      .map((ilan) => `${ilan.oyuncu.name} (${paraFormatla(ilan.fiyat)})`)
+      .join(", ");
+    await message.reply(`Birden fazla eşleşme buldum, daha net yaz: ${secenekler}`);
+    return;
+  }
+
+  const ilan = eslesmeler[0];
+
+  if (ilan.saticiId === userId) {
+    await message.reply("Kendi oyuncunu kendinden satın alamazsın, `!!satisiptal` ile geri çekebilirsin.");
+    return;
+  }
+
+  const bakiye = kullaniciParasi(userId);
+  if (bakiye < ilan.fiyat) {
+    await message.reply(
+      `Yeterli paran yok. **${ilan.oyuncu.name}** için ${paraFormatla(ilan.fiyat)} lazım, senin bakiyen ${paraFormatla(bakiye)}.`
+    );
+    return;
+  }
+
+  // Parayı transfer et
+  paraCikar(userId, ilan.fiyat);
+  paraEkle(ilan.saticiId, ilan.fiyat);
+
+  // Oyuncuyu satıcının kadrosundan ve varsa formasyonundan çıkar
+  const saticiKadro = kullaniciKadrosu(ilan.saticiId);
+  const oyuncuIndex = saticiKadro.findIndex((o) => o.id === ilan.oyuncuId);
+  if (oyuncuIndex !== -1) saticiKadro.splice(oyuncuIndex, 1);
+
+  const saticiFormasyon = kullaniciFormasyonu(ilan.saticiId);
+  for (const slot of FORMASYON_SIRA) {
+    if (saticiFormasyon[slot] && saticiFormasyon[slot].id === ilan.oyuncuId) {
+      saticiFormasyon[slot] = null;
+    }
+  }
+
+  // Alıcının kadrosuna ekle
+  kullaniciKadrosu(userId).push(ilan.oyuncu);
+
+  // İlanı piyasadan kaldır
+  futbolData.piyasa = futbolData.piyasa.filter((i) => i.id !== ilan.id);
+
+  veriKaydet();
+
+  await message.reply(
+    `✅ **${ilan.oyuncu.name}** kadrona katıldı! ${paraFormatla(ilan.fiyat)} <@${ilan.saticiId}>'a ödendi. Yeni bakiyen: **${paraFormatla(kullaniciParasi(userId))}**`
+  );
+
+  try {
+    await message.channel.send(
+      `📢 <@${ilan.saticiId}>, **${ilan.oyuncu.name}** adlı oyuncun ${message.author.username}'a ${paraFormatla(ilan.fiyat)} karşılığında satıldı. Yeni bakiyen: **${paraFormatla(kullaniciParasi(ilan.saticiId))}**`
+    );
+  } catch (err) {
+    // önemli değil
+  }
+}
+
+// ─── !!satisiptal — Kendi İlanını Geri Çek ───────────────────────────────────
+
+async function satisIptalKomutu(message, isim) {
+  const userId = message.author.id;
+
+  if (!isim) {
+    await message.reply("Hangi ilanı iptal edeceksin? `!!satisiptal <isim>` şeklinde yaz.");
+    return;
+  }
+
+  const hedef = normalizeAd(isim);
+  const eslesmeler = futbolData.piyasa.filter(
+    (ilan) => ilan.saticiId === userId && normalizeAd(ilan.oyuncu.name).includes(hedef)
+  );
+
+  if (eslesmeler.length === 0) {
+    await message.reply(`Piyasada senin "${isim}" diye bir ilanın yok.`);
+    return;
+  }
+  if (eslesmeler.length > 1) {
+    const secenekler = eslesmeler.slice(0, 8).map((ilan) => ilan.oyuncu.name).join(", ");
+    await message.reply(`Birden fazla eşleşme buldum, daha net yaz: ${secenekler}`);
+    return;
+  }
+
+  const ilan = eslesmeler[0];
+  futbolData.piyasa = futbolData.piyasa.filter((i) => i.id !== ilan.id);
+  veriKaydet();
+
+  await message.reply(`↩️ **${ilan.oyuncu.name}** piyasadan geri çekildi.`);
+}
+
 // ─── !!futbolyardim ───────────────────────────────────────────────────────────
 
 async function yardimKomutu(message) {
@@ -753,16 +1182,26 @@ async function yardimKomutu(message) {
     .setTitle("⚽ Futbol Komutları")
     .setDescription(
       [
+        "**Kadro & Takım**",
         "`!!oyuncu` — günlük 20 oyuncu çek",
-        "`!!kadro` — topladığın oyuncuları gör",
+        "`!!kadro` — en iyi 20 oyuncunu sayfa sayfa gör (◀️ ▶️ ile gez)",
         "`!!takım` — ilk 11'ini gör",
-        "`!!otomatik` — kadrondaki en iyi 11'i otomatik kurar (gerçek mevkilere göre)",
+        "`!!otomatik` — kadrondaki en iyi 11'i otomatik kurar",
         "`!!kaleci <isim>`, `!!stoper <isim>`, `!!sagbek <isim>`, `!!solbek <isim>`",
         "`!!defansiorta <isim>`, `!!ofansiorta <isim>`, `!!sagkanat <isim>`, `!!solkanat <isim>`, `!!forvet <isim>`",
         "`!!cikar <mevki>` — bir mevkiyi boşalt (örn: forvet1, stoper2)",
-        "`!!mac @kullanici` — maç yap",
+        "",
+        "**Maç & Lig**",
+        "`!!mac @kullanici` — maç yap, kazanana puan + para",
         "`!!puan` — kendi puanını gör",
         "`!!puanlar` — lig tablosu",
+        "",
+        "**Para & Transfer Piyasası**",
+        "`!!bakiye` — Euro bakiyeni gör",
+        "`!!satisa <isim> <fiyat>` — bir oyuncunu piyasaya çıkar",
+        "`!!piyasa` — satıştaki oyuncuları sayfa sayfa gör (◀️ ▶️ ile gez)",
+        "`!!satinal <isim>` — piyasadan oyuncu satın al",
+        "`!!satisiptal <isim>` — kendi ilanını geri çek",
       ].join("\n")
     );
 
@@ -826,6 +1265,31 @@ async function futbolMesajIsleyici(message) {
 
     if (komutAdi === "puanlar") {
       await puanTablosuKomutu(message);
+      return true;
+    }
+
+    if (komutAdi === "bakiye" || komutAdi === "para") {
+      await bakiyeGosterKomutu(message);
+      return true;
+    }
+
+    if (komutAdi === "satisa" || komutAdi === "sat") {
+      await satisaCikarKomutu(message, argumanlar);
+      return true;
+    }
+
+    if (komutAdi === "piyasa") {
+      await piyasaGosterKomutu(message);
+      return true;
+    }
+
+    if (komutAdi === "satinal" || komutAdi === "al") {
+      await satinAlKomutu(message, argumanlar);
+      return true;
+    }
+
+    if (komutAdi === "satisiptal" || komutAdi === "iptal") {
+      await satisIptalKomutu(message, argumanlar);
       return true;
     }
 
