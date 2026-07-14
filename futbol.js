@@ -77,7 +77,7 @@ const { EmbedBuilder } = require("discord.js");
 const OYUNCU_HAVUZU_DOSYASI = path.join(__dirname, "futbol_oyuncular.json");
 const FUTBOL_DATA_DOSYASI = path.join(__dirname, "futbol_data.json");
 
-const GUNLUK_OYUNCU_SAYISI = 10000;
+const GUNLUK_OYUNCU_SAYISI = 1000;
 const PREFIX = "!!";
 const BASLANGIC_PARA = 1_000_000; // yeni kullanıcının başlangıç bakiyesi (€)
 
