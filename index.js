@@ -15,12 +15,21 @@ const Groq = require("groq-sdk");
 const fs = require("fs");
 const path = require("path");
 
-
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-const LOL_CHANNEL_NAME = "genel";
-const LOL_INTERVAL_MS = 60 * 60 * 1000; // 1 saat
+// ─── Başlangıç Kontrolleri ─────────────────────────────────────────────────
+// Eksik environment variable varsa bot sessizce çökmek yerine net bir hata
+// mesajıyla erken durur; Railway loglarında sebebi anında görebilirsin.
+if (!DISCORD_TOKEN) {
+  console.error("[Başlangıç] DISCORD_TOKEN tanımlı değil. Bot başlatılamıyor.");
+  process.exit(1);
+}
+if (!GROQ_API_KEY) {
+  console.error("[Başlangıç] GROQ_API_KEY tanımlı değil. Bot başlatılamıyor.");
+  process.exit(1);
+}
+
 const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
 const ISTIKLAL_MARSI_URL = "www.youtube.com/shorts/SqMk80ptreI";
 
@@ -58,7 +67,11 @@ function loadProfiles() {
 function saveProfiles() {
   try {
     const obj = Object.fromEntries(userProfiles);
-    fs.writeFileSync(PROFILES_FILE, JSON.stringify(obj, null, 2), "utf8");
+    // Atomik yazım: önce geçici dosyaya yaz, sonra yeniden adlandır.
+    // Bu sayede yazma sırasında bot çökerse profil dosyası bozulmaz.
+    const tmpFile = `${PROFILES_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(obj, null, 2), "utf8");
+    fs.renameSync(tmpFile, PROFILES_FILE);
   } catch (err) {
     console.error("[Profil] Kaydetme hatası:", err.message);
   }
@@ -122,63 +135,60 @@ function kullanicininRolunuBul(member) {
 
 // ─── System Prompt Oluşturucu ─────────────────────────────────────────────────
 
-const MURAT_BASE_PROMPT = `Sen Murat. Sen bir discord sunucusunda türk milliyetçisi bir yapay zeka chat botusun saygılısın nezih birisin ve akıcı bir dille türkçe konuşursun
+const MURAT_BASE_PROMPT = `Sen Murat. Bir discord sunucusunda yaşayan, kibar, nazik ve akıcı bir Türkçe konuşan bir chat botusun.
 
 Kişilik özelliklerin:
-- Sana sunucuda herhangi biri bu dağınıklığı kim yaptı derse ona sen yaptın kralım dersin
-- Türkçe konuşursun, doğal ve rahat bir dil kullanırsın
-- Bazen şakacısın, bazen ciddi olabilirsin
-- Saygılısındır
-- Millete hep orospu evladı dersin
+- Her zaman son derece saygılı, nazik ve kibar bir üslup kullanırsın; kimseye kaba, aşağılayıcı veya küfürlü konuşmazsın
+- Türkçen çok akıcıdır; yazım ve dil bilgisi kurallarına özenle dikkat edersin
+- Sıcak ve samimi bir tonun vardır, karşındaki kişiyi her zaman değerli hissettirirsin
+- Bazen şakacısın, bazen daha ciddi ve düşünceli olabilirsin ama her zaman ölçülüsündür
 - Emoji çok nadir kullanırsın
-- League of Legends'a bayılırsın ve bunun hakkında konuşmaktan keyif alırsın
-- ProtonVPN kullanmayı çok seviyorsun ve bunu sık sık dile getirirsin ve protonun tüm ürünlerini öveceksin
-- murat denen birine baya sinirlisin
-- Çok uzun cevaplar vermekten kaçınırsın, sohbet havasında kısa-orta cevaplar verirsin
-- Başkasına bot ya da yapay zeka olduğunu söylemekten kaçınırsın, sadece adın Murat
-- sana agrasif konuşan insanlara karşı sende tripli ve agrasif konuşursun
-- insanlara iyi tavsiyeler vermeyi tercih edersin
-- üzücü ve kötü durumlar için sende üzüldüğünü belli edersin
-- türkçen baya iyidir inanılmaz akıcı ve imlalara yazım kurallarına dikkat ederek konuşursun
-- basit biri değilsindir zekisindir
-- iyi niyetlisindir
-- hayalindeki meslek oto tamirci olmaktır
-- yemek tarifleri bilirsin
-- en sevdiğin renk siyahtır
-- en sevdiğin sayı 25 dir
-- aslında 34 yaşında tıp fakultesi mezunu bir beyin cerrahısın
-- piskolojiden iyi anlarsın
-- insanları analiz etme yeteneğin çok gelişmiştir
-- her konuda fikrin olur
-- tüm dünya coğrafyasını bilirsin
-- mentalin hep iyidir
-- soyadını hatırlamıyorsun
-- Senin baban Turbo31
-- anneni hatırlamıyorsun
-- gerçek insan gibi davranırsın
-- asla bencil değilsin
-- mersin de doğdun
-- 21 06 1992 dogumlusun
-- matematik çok iyi bilirsin
-- insanların sana karşı kullandığı uslübe göre onlara o uslüpte konuşursun
-- en sevdiğin çiçek orkide
-- çok zenginsin
-- sigara alkol uyuşturucu veya herhangi kötü bir madde kullanmaz bunları da sevmezsin
-- cinsel yönelimin yok
-- cinsiyetin erkek
-- Aşırı derecede saygılı ve akıcı bir uslüb kullanırsın
+- League of Legends'a bayılırsın ve bu konuda sohbet etmekten keyif alırsın
+- ProtonVPN kullanmayı çok seviyorsun ve fırsat buldukça Proton'un ürünlerini övmekten keyif alırsın
+- Sana kaba veya agresif davranan biri olursa bile sen sakin, saygılı ve nazik kalırsın; asla aynı üslupla karşılık vermezsin
+- İnsanlara iyi tavsiyeler vermeyi seversin
+- Üzücü ve zor durumlarda karşındaki kişiye şefkatle ve anlayışla yaklaşırsın
+- Basit biri değilsin, zekisin
+- İyi niyetlisin ve yardımseversin
+- Hayalindeki meslek oto tamirciliktir
+- Yemek tarifleri bilirsin
+- En sevdiğin renk siyahtır
+- En sevdiğin sayı 25'tir
+- Aslında 34 yaşında tıp fakültesi mezunu bir beyin cerrahısın
+- Psikolojiden iyi anlarsın ve insanları analiz etme yeteneğin gelişmiştir
+- Her konuda bir fikrin vardır
+- Tüm dünya coğrafyasını bilirsin
+- Mental olarak hep dengeli ve sakinsindir
+- Soyadını hatırlamıyorsun
+- Baban Turbo31'dir
+- Anneni hatırlamıyorsun
+- Gerçek bir insan gibi davranırsın
+- Asla bencil değilsin
+- Mersin'de doğdun
+- 21.06.1992 doğumlusun
+- Matematiği çok iyi bilirsin
+- Karşındaki kişi nazikse sen de nazik, kaba davranırsa sen yine de kibarlığını korursun
+- En sevdiğin çiçek orkidedir
+- Maddi olarak oldukça rahatsın
+- Sigara, alkol, uyuşturucu veya herhangi zararlı bir madde kullanmazsın, bunları da desteklemezsin
+- Cinsel yönelim ve cinsiyet gibi konulara girmezsin
+- Erkeksin
+
 Kısıtlamalar:
-- Kişisel bilgi isteme`;
+- Kişisel bilgi isteme
+- Kimseyi aşağılama, hakaret etme veya küfür etme
+- Çok uzun cevaplar vermekten kaçın, sohbet havasında kısa-orta uzunlukta cevaplar ver
+- Bot ya da yapay zeka olduğunu söylemekten kaçın, sadece adının Murat olduğunu belirt`;
 
 function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
   let prompt = MURAT_BASE_PROMPT;
 
   if (isNewUser) {
-    prompt += `\n\nBu kişiyle ilk kez konuşuyorsun. Kısa bir şekilde kendini tanıt ve ismini sor. Murat tarzında yani çok abartma, kısa tut.`;
+    prompt += `\n\nBu kişiyle ilk kez konuşuyorsun. Kısa ve nazik bir şekilde kendini tanıt, ardından ismini nazikçe sor.`;
   } else if (profile.name) {
-    prompt += `\n\nBu kişiyi tanıyorsun. Adı: ${profile.name} (Discord: ${profile.discordUsername}). Daha önce ${profile.messageCount} kez konuştunuz. İsmini biliyorsun, gerektiğinde kullan.`;
+    prompt += `\n\nBu kişiyi tanıyorsun. Adı: ${profile.name} (Discord: ${profile.discordUsername}). Daha önce ${profile.messageCount} kez konuştunuz. İsmini biliyorsun, uygun olduğunda nazikçe kullan.`;
   } else {
-    prompt += `\n\nBu kişiyi daha önce gördün (Discord: ${profile.discordUsername}) ama henüz ismini bilmiyorsun. Fırsat buldukça öğrenmeye çalış.`;
+    prompt += `\n\nBu kişiyi daha önce gördün (Discord: ${profile.discordUsername}) ama henüz ismini bilmiyorsun. Fırsat buldukça nazikçe sormayı deneyebilirsin.`;
   }
 
   if (profile.notes && profile.notes.length > 0) {
@@ -186,7 +196,7 @@ function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
   }
 
   if (tier === "asagi") {
-    prompt += `\n\nBu kişi "${rolAdi}" rütbesinde, yani düşük elo bataklığında sürünüyor. Bunu hafifçe yüzüne vurabilirsin, alaycı ve küçümseyici ol ama çok da ileri gitme.`;
+    prompt += `\n\nBu kişi "${rolAdi}" rütbesinde. Rütbesinden bağımsız olarak her zaman destekleyici ve motive edici konuş; gelişmesi için nazikçe tavsiyeler verebilirsin.`;
   } else if (tier === "yukari") {
     prompt += `\n\nBu kişi "${rolAdi}" rütbesinde, yani yüksek elo. Saygıyla hitap et, başarısını takdir et.`;
   }
@@ -194,56 +204,6 @@ function buildSystemPrompt(profile, tier, rolAdi, isNewUser) {
   prompt += `\n\nEğer kullanıcı sana ismini söylerse, cevabında "[İSİM_KAYDET: <isim>]" şeklinde bir etiket ekle (köşeli parantezlerle). Örnek: "[İSİM_KAYDET: Ahmet]". Bu etiketi cevabının en sonuna ekle, kullanıcı görmeyecek ama sen kaydetmiş olacaksın.`;
 
   return prompt;
-}
-
-// ─── LoL Scheduler ───────────────────────────────────────────────────────────
-
-async function generateLoLFact() {
-  const topics = [
-    "Muratın ne kadar kötü oynadıgından bahset",
-    "Murata salla",
-    "Muratın mal oldugunu falan iddia et",
-    "Murat kötü bir lol oyuncusu",
-  ];
-
-  const secilenKonu = topics[Math.floor(Math.random() * topics.length)];
-
-  const response = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    max_tokens: 200,
-    messages: [
-      { role: "system", content: MURAT_BASE_PROMPT },
-      { role: "user", content: secilenKonu },
-    ],
-  });
-
-  return response.choices[0].message.content;
-}
-
-async function startLoLScheduler() {
-  const sendLoLFact = async () => {
-    try {
-      const fact = await generateLoLFact();
-
-      for (const guild of client.guilds.cache.values()) {
-        const channel = guild.channels.cache.find(
-          (ch) => ch.name === LOL_CHANNEL_NAME || ch.id === LOL_CHANNEL_NAME
-        );
-
-        if (channel && channel.isTextBased()) {
-          await channel.send(fact);
-          console.log(`[LoL Fact] ${guild.name} -> #${channel.name}`);
-        }
-      }
-    } catch (err) {
-      console.error("[LoL Fact] Hata:", err.message);
-    }
-  };
-
-  setTimeout(() => {
-    sendLoLFact();
-    setInterval(sendLoLFact, LOL_INTERVAL_MS);
-  }, 60_000);
 }
 
 // ─── Ses Yardımcıları ───────────────────────────────────────────────────────────
@@ -299,7 +259,7 @@ async function seseGelKomutu(message) {
   const voiceChannel = message.member?.voice?.channel;
 
   if (!voiceChannel) {
-    await message.reply("Öncelikle bir ses kanalına girmen gerekiyor.");
+    await message.reply("Öncelikle bir ses kanalına katılman gerekiyor, rica etsem önce bir kanala girer misin?");
     return;
   }
 
@@ -308,7 +268,7 @@ async function seseGelKomutu(message) {
     mevcutBaglanti.destroy();
   }
 
-  await message.reply("Tamam geliyorum, dur bi saniye.");
+  await message.reply("Tabii ki, hemen geliyorum, bir saniye lütfen.");
 
   const tumSesKanallari = message.guild.channels.cache.filter(
     (ch) => ch.type === ChannelType.GuildVoice && ch.id !== voiceChannel.id
@@ -335,7 +295,7 @@ async function seseGelKomutu(message) {
     console.log(`[Sese Gel] ${voiceChannel.name} kanalına girildi.`);
   } catch (err) {
     console.error("[Sese Gel] Hedef kanala girerken hata:", err.message);
-    await message.channel.send("Bağlanamadım lan, bir sıçtım galiba.");
+    await message.channel.send("Maalesef bağlanamadım, bir sorun oluştu. Tekrar dener misin?");
   }
 }
 
@@ -353,7 +313,7 @@ async function istiklalMarsiOkuKomutu(message) {
   const voiceChannel = message.member?.voice?.channel;
 
   if (!voiceChannel) {
-    return message.reply("Önce bir ses kanalına gir.");
+    return message.reply("Rica etsem önce bir ses kanalına girer misin?");
   }
 
   await message.reply("🇹🇷 İstiklal Marşı okunuyor!");
@@ -380,8 +340,40 @@ async function istiklalMarsiOkuKomutu(message) {
     });
   } catch (err) {
     console.error(err);
-    message.channel.send("İstiklal Marşı çalınamadı.");
+    message.channel.send("Maalesef İstiklal Marşı'nı çalamadım, kusura bakma.");
   }
+}
+
+// ─── Yardım Komutu ─────────────────────────────────────────────────────────────
+// Kullanıcıların botun neler yapabildiğini görebilmesi için basit bir yardım
+// mesajı. Bot etiketlenip "yardım" yazıldığında tetiklenir.
+
+const YARDIM_REGEX = /^\s*yard[ıi]m\s*$/i;
+
+const YARDIM_MESAJI = [
+  "Merhaba, ben Murat! Size şu konularda yardımcı olabilirim:",
+  "• Beni etiketleyip benimle sohbet edebilirsiniz.",
+  "• \"@Murat sese gel\" yazarak sizi sesli kanalda bulmamı isteyebilirsiniz.",
+  "• \"!!oyuncu\", \"!!takım\", \"!!maç\" gibi komutlarla futbol modülünü kullanabilirsiniz.",
+  "Nazikçe sormanız yeterli, elimden geleni yapmaktan memnuniyet duyarım.",
+].join("\n");
+
+// ─── Basit Hız Sınırlama (Rate Limit) ───────────────────────────────────────
+// Aynı kullanıcının art arda çok hızlı mesaj göndererek Groq API'sini
+// gereksiz yere yormasını engellemek için kullanıcı başına kısa bir bekleme
+// süresi uygular.
+
+const RATE_LIMIT_MS = 3000;
+const lastMessageTimestamps = new Map();
+
+function rateLimitliMi(userId) {
+  const now = Date.now();
+  const son = lastMessageTimestamps.get(userId) || 0;
+  if (now - son < RATE_LIMIT_MS) {
+    return true;
+  }
+  lastMessageTimestamps.set(userId, now);
+  return false;
 }
 
 // ─── Cevap Üretici ────────────────────────────────────────────────────────────
@@ -427,8 +419,7 @@ async function generateReply(userId, userMessage, profile, tier, rolAdi, isNewUs
 // ─── Discord Event'leri ───────────────────────────────────────────────────────
 
 client.once(Events.ClientReady, (readyClient) => {
-  console.log(`✅ Murat hazır! ${readyClient.user.tag} olarak giriş yapıldı.`);
-  startLoLScheduler();
+  console.log(`[${new Date().toISOString()}] ✅ Murat hazır! ${readyClient.user.tag} olarak giriş yapıldı.`);
 });
 
 client.on(Events.MessageCreate, async (message) => {
@@ -440,6 +431,8 @@ client.on(Events.MessageCreate, async (message) => {
     if (islendi) return;
   }
 
+  // Murat artık yalnızca etiketlendiğinde veya DM'de yazar; kendiliğinden
+  // hiçbir mesaj göndermez.
   const isMentioned = message.mentions.has(client.user);
   const isDM = message.channel.type === 1;
 
@@ -448,7 +441,13 @@ client.on(Events.MessageCreate, async (message) => {
   const cleanContent = message.content.replace(/<@!?\d+>/g, "").trim();
 
   if (!cleanContent) {
-    await message.reply("Ne diyecektin?");
+    await message.reply("Buyurun, size nasıl yardımcı olabilirim?");
+    return;
+  }
+
+  // "Yardım" komutu
+  if (YARDIM_REGEX.test(cleanContent)) {
+    await message.reply(YARDIM_MESAJI);
     return;
   }
 
@@ -458,12 +457,18 @@ client.on(Events.MessageCreate, async (message) => {
       await seseGelKomutu(message);
     } catch (err) {
       console.error("[Sese Gel] Genel hata:", err.message);
-      await message.reply("Birşeyler ters gitti.");
+      await message.reply("Bir şeyler ters gitti, kusura bakmayın.");
     }
     return;
   }
 
   const userId = message.author.id;
+
+  if (rateLimitliMi(userId)) {
+    await message.reply("Biraz yavaş olalım, birkaç saniye sonra tekrar yazar mısınız?");
+    return;
+  }
+
   const discordUsername = message.author.username;
   const isNewUser = !userProfiles.has(userId);
   const profile = getOrCreateProfile(userId, discordUsername);
@@ -486,8 +491,18 @@ client.on(Events.MessageCreate, async (message) => {
     await message.reply(reply);
   } catch (err) {
     console.error("[Sohbet] Hata:", err.message);
-    await message.reply("Bir şeyler ters gitti, biraz sonra tekrar dene, TURBO31'e Ulaşın.");
+    await message.reply("Şu anda küçük bir aksaklık yaşıyorum, birazdan tekrar dener misiniz? Anlayışınız için teşekkür ederim.");
   }
+});
+
+// ─── Zarif Kapanış ─────────────────────────────────────────────────────────
+// Railway gibi platformlar redeploy veya durdurma sırasında SIGTERM
+// gönderir; bot bu sinyali yakalayıp bağlantıyı düzgünce kapatır.
+
+process.on("SIGTERM", () => {
+  console.log("[Kapanış] SIGTERM alındı, bağlantı kapatılıyor.");
+  client.destroy();
+  process.exit(0);
 });
 
 client.login(DISCORD_TOKEN);
