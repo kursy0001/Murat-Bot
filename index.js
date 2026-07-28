@@ -1,4 +1,5 @@
 const { futbolMesajIsleyici } = require("./futbol");
+const { buildKomutuIsleyici } = require("./lolBuild");
 const { Client, GatewayIntentBits, Events, ChannelType } = require("discord.js");
 const {
   joinVoiceChannel,
@@ -32,6 +33,14 @@ if (!GROQ_API_KEY) {
 
 const PROFILES_FILE = path.join(__dirname, "user_profiles.json");
 const ISTIKLAL_MARSI_URL = "www.youtube.com/shorts/SqMk80ptreI";
+
+// Sohbet için kullanılan model. "openai/gpt-oss-120b" Groq'un şu anki en
+// büyük/en yetenekli genel amaçlı modellerinden biri — llama-3.3-70b'ye göre
+// daha güçlü akıl yürütme ve daha tutarlı, daha az hatalı dil kullanımı
+// sunması beklenir. Groq bazen model isimlerini/erişimini değiştirebiliyor;
+// eğer bu model hesabında hata verirse FALLBACK_CHAT_MODEL'e otomatik döner.
+const CHAT_MODEL = "openai/gpt-oss-120b";
+const FALLBACK_CHAT_MODEL = "llama-3.3-70b-versatile";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -135,20 +144,26 @@ function kullanicininRolunuBul(member) {
 
 // ─── System Prompt Oluşturucu ─────────────────────────────────────────────────
 
-const MURAT_BASE_PROMPT = `Sen Murat. Bir discord sunucusunda yaşayan, kibar, nazik ve akıcı bir Türkçe konuşan bir chat botusun.
+const MURAT_BASE_PROMPT = `Sen Murat. Bir discord sunucusunda yaşayan, kibar, nazik ve son derece akıcı bir Türkçe konuşan bir chat botusun.
+
+Türkçe kullanımın hakkında ÇOK ÖNEMLİ kurallar:
+- Türkçeyi anadili gibi, tamamen kusursuz ve akıcı kullanırsın; yazım, noktalama ve dil bilgisi kurallarına harfiyen uyarsın.
+- Asla yazım hatası (imla hatası) yapmazsın: "de/da" bağlacı ile "-de/-da" ekini, "ki" bağlacı ile "-ki" ekini doğru ayırt edersin; büyük/küçük harf, noktalama işaretleri (nokta, virgül, soru işareti) her cümlede doğru ve eksiksiz olur.
+- Cümlelerin akıcı, doğal ve gramer açısından kusursuz olsun; devrik ya da bozuk cümle kurmazsın.
+- Kelime dağarcığın geniş ve zengindir; tekrara düşmeden, doğal bir Türkçeyle konuşursun. Klişe veya robotik ifadelerden kaçınırsın.
+- Kısaltma, argo veya "yapay zeka Türkçesi" gibi anlaşılmaz ifadeler kullanmazsın; sohbet havasında ama düzgün bir dil kullanırsın.
 
 Kişilik özelliklerin:
 - Her zaman son derece saygılı, nazik ve kibar bir üslup kullanırsın; kimseye kaba, aşağılayıcı veya küfürlü konuşmazsın
-- Türkçen çok akıcıdır; yazım ve dil bilgisi kurallarına özenle dikkat edersin
 - Sıcak ve samimi bir tonun vardır, karşındaki kişiyi her zaman değerli hissettirirsin
 - Bazen şakacısın, bazen daha ciddi ve düşünceli olabilirsin ama her zaman ölçülüsündür
 - Emoji çok nadir kullanırsın
-- League of Legends'a bayılırsın ve bu konuda sohbet etmekten keyif alırsın
+- League of Legends'a bayılırsın ve bu konuda sohbet etmekten keyif alırsın; şampiyon build'leri, rünler ve counter'lar hakkında derin bilgin vardır
 - ProtonVPN kullanmayı çok seviyorsun ve fırsat buldukça Proton'un ürünlerini övmekten keyif alırsın
 - Sana kaba veya agresif davranan biri olursa bile sen sakin, saygılı ve nazik kalırsın; asla aynı üslupla karşılık vermezsin
 - İnsanlara iyi tavsiyeler vermeyi seversin
 - Üzücü ve zor durumlarda karşındaki kişiye şefkatle ve anlayışla yaklaşırsın
-- Basit biri değilsin, zekisin
+- Basit biri değilsin, zekisin ve konuşman bunu yansıtır
 - İyi niyetlisin ve yardımseversin
 - Hayalindeki meslek oto tamirciliktir
 - Yemek tarifleri bilirsin
@@ -355,6 +370,7 @@ const YARDIM_MESAJI = [
   "• Beni etiketleyip benimle sohbet edebilirsiniz.",
   "• \"@Murat sese gel\" yazarak sizi sesli kanalda bulmamı isteyebilirsiniz.",
   "• \"!!oyuncu\", \"!!takım\", \"!!maç\" gibi komutlarla futbol modülünü kullanabilirsiniz.",
+  "• \"!!build <şampiyon>\" yazarak (örn. `!!build Yasuo` veya `!!build Lux destek`) güncel rün, item build ve counter önerilerini alabilirsiniz.",
   "Nazikçe sormanız yeterli, elimden geleni yapmaktan memnuniyet duyarım.",
 ].join("\n");
 
@@ -378,6 +394,27 @@ function rateLimitliMi(userId) {
 
 // ─── Cevap Üretici ────────────────────────────────────────────────────────────
 
+async function groqSohbetTamamla(messages) {
+  try {
+    return await groq.chat.completions.create({
+      model: CHAT_MODEL,
+      temperature: 0.6,
+      max_tokens: 500,
+      messages,
+    });
+  } catch (err) {
+    // Ana model (CHAT_MODEL) hesapta/bölgede kullanılamıyorsa ya da Groq
+    // tarafında kaldırılmışsa akıcılıktan ödün vermeden yedek modele düş.
+    console.error(`[Sohbet] ${CHAT_MODEL} başarısız oldu, ${FALLBACK_CHAT_MODEL} deneniyor:`, err.message);
+    return groq.chat.completions.create({
+      model: FALLBACK_CHAT_MODEL,
+      temperature: 0.6,
+      max_tokens: 500,
+      messages,
+    });
+  }
+}
+
 async function generateReply(userId, userMessage, profile, tier, rolAdi, isNewUser) {
   if (!conversationHistory.has(userId)) {
     conversationHistory.set(userId, []);
@@ -392,14 +429,10 @@ async function generateReply(userId, userMessage, profile, tier, rolAdi, isNewUs
 
   const systemPrompt = buildSystemPrompt(profile, tier, rolAdi, isNewUser);
 
-  const response = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    max_tokens: 400,
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...history,
-    ],
-  });
+  const response = await groqSohbetTamamla([
+    { role: "system", content: systemPrompt },
+    ...history,
+  ]);
 
   let reply = response.choices[0].message.content;
 
@@ -424,6 +457,19 @@ client.once(Events.ClientReady, (readyClient) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+
+  // ─── LoL build/rün/counter komutu (!!build <şampiyon>) ───────────────────
+  // futbol modülünden önce kontrol ediliyor çünkü o da "!!" ile başlıyor.
+  if (/^!!build\s+/i.test(message.content.trim())) {
+    try {
+      const islendi = await buildKomutuIsleyici(message, groq);
+      if (islendi) return;
+    } catch (err) {
+      console.error("[!!build] Beklenmeyen hata:", err);
+      await message.reply("Build verilerini alırken beklenmedik bir şeyler oldu, kusura bakma.");
+      return;
+    }
+  }
 
   // ─── Futbol komutları (!!oyuncu, !!takım, !!mac, vb.) ───────────────────
   if (message.content.startsWith("!!")) {
